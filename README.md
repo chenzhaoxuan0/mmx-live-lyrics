@@ -1,0 +1,88 @@
+# mmx-live-lyrics · 直播实时歌词字幕
+
+给主播的实时语音转字幕工具：把麦克风（或系统声音）转成**音乐软件歌词式的大字**，悬浮在桌面上或直接进 OBS。纯 API 识别（MiniMax `asr-1.0`，即 `mmx speech transcribe` 背后的服务），无本地模型、无 Python 运行时。
+
+从 [sub-title](https://github.com/) 项目精简而来：砍掉全部本地引擎、翻译、皮肤、说话人，只保留"采集 → 断句 → API → 歌词窗口"这一条链路。
+
+## 特性
+
+- **体积小启动快**：单个 exe 约 7MB（WebView2 是 Win10/11 系统组件），秒级启动，运行内存约 75MB
+- **歌词式显示**：渐变大字 + 上一句淡出，四套主题（极光 / 落日 / 霓虹 / 纯白描边）
+- **两种 OBS 接入**：
+  - 浏览器源：添加 `http://127.0.0.1:39871/`（默认开），桌面窗口可以完全隐藏
+  - 窗口采集：直接采集悬浮窗（无边框、透明、置顶）
+- **双声源**：麦克风（推荐，省配额）或系统声音（WASAPI loopback 回录输出）
+- **省配额设计**：能量 VAD 断句——静音段直接丢弃不上传；纯静音永不出段
+- **复用 mmx CLI 登录**：自动读 `~/.mmx/config.json` 的 API Key，装过 mmx 就零配置；也可在设置里填独立 Key
+- **全局热键**：默认 `Ctrl+Alt+L` 暂停/继续字幕
+- **自动重试**：网络/服务端错误重试 2 次；鉴权错误明确报错不空转
+
+## 快速开始
+
+### 前置
+
+1. Windows 10/11（WebView2 运行时，系统一般自带）
+2. 满足以下任一：
+   - 已装 [mmx CLI](https://github.com/MiniMax-AI/cli) 并登录（`mmx auth login --api-key sk-xxx`）
+   - 或在设置面板手动填 API Key
+
+### 运行
+
+```bash
+cd src-tauri
+cargo run --release
+```
+
+或在设置面板点「开始识别」。命令行参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--start` | 启动后自动开始识别（配合系统开机自启） |
+| `--source mic\|system` | 覆盖声源（默认取配置） |
+| `--selftest` | 端到端自检（debug 构建下可见输出） |
+
+### OBS 接入
+
+- **浏览器源（推荐）**：来源 → 浏览器 → URL 填 `http://127.0.0.1:39871/`，宽高建议 1200×280。主题/字号跟随桌面端设置自动同步。
+- **窗口采集**：来源 → 窗口捕获 → 选「直播歌词字幕」。注意悬停工具栏会一起被采集，直播中建议用浏览器源。
+
+## 使用建议
+
+- **默认用麦克风**：说话有自然停顿，VAD 断句准、配额省。系统声音在持续背景音乐下会一直出段烧配额。
+- 断句段长默认 2 秒：越短字幕越快出但句子更碎；静音自动断句不受此限制。
+- 总延迟 ≈ 段长 + 网络往返，典型 2~4 秒，一句一句弹出。
+- 游戏画面上建议把「背景衬底」调到 20%~40% 提高可读性。
+- 配额用量：`mmx quota show`。
+
+## 架构
+
+```
+cpal 采集（麦克风 / WASAPI loopback，设备混音格式 f32）
+  → 引擎线程：声道混缩 → 7.2kHz 抗混叠低通 → 线性重采样到 16k mono
+  → 能量 VAD 分段（2s 满段 或 500ms 后遇 300ms 静音提前断句；纯静音丢弃）
+  → 工作线程：WAV 编码 → POST /v1/speech_to_text（multipart，重试×2）
+  → 总线：Tauri 事件（桌面窗口）+ WebSocket 广播（OBS 浏览器源）
+```
+
+- 三个 std 线程 + 两条 mpsc 通道，停止用 AtomicBool 哨兵（与 sub-title 相同的线程模型）
+- HTTP 用 ureq（同步 + rustls），multipart 手工构造，零重型依赖
+- OBS 服务单端口复用：`GET /` 回歌词页面，`Upgrade: websocket` 走 tungstenite，只绑 127.0.0.1
+- 配置：`%APPDATA%\mmx-live-lyrics\config.json`（窗口位置、主题、字号、声源、段长等）
+
+## 从源码构建
+
+```bash
+cd src-tauri
+cargo build --release
+# 产物：target/release/mmx-live-lyrics.exe（单文件，绿色免安装）
+cargo run -- --selftest   # 端到端自检：wav 编码/重采样/VAD/真实 API
+```
+
+需要 Rust（MSVC 工具链）。前端是 `ui/index.html` 单文件（内联 CSS/JS），无 Node 构建步骤。
+
+## 已知边界
+
+- 段式 API：字幕以句为单位弹出（约 2~4 秒延迟），不是逐字实时
+- 持续音乐/噪音下系统声源会持续消耗配额（能量 VAD 无法区分音乐和语音）
+- OBS 端口固定默认 39871，修改需改配置文件并重启
+- API Key 明文存于本机 config.json（与 mmx CLI 相同的存放方式）

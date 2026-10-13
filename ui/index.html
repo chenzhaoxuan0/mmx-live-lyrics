@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>直播歌词字幕</title>
+<style>
+  :root {
+    --fs: 72px;
+    --bg: 0;
+    --grad: linear-gradient(100deg, #67e8f9 5%, #a78bfa 50%, #f0abfc 95%);
+    --glow: rgba(139, 92, 246, .45);
+    --prev: rgba(255, 255, 255, .38);
+    --dot: #34d399;
+  }
+  [data-theme="sunset"] {
+    --grad: linear-gradient(100deg, #fde68a 5%, #fb923c 45%, #f43f5e 95%);
+    --glow: rgba(251, 113, 133, .45);
+    --prev: rgba(255, 237, 213, .42);
+  }
+  [data-theme="neon"] {
+    --grad: linear-gradient(100deg, #4ade80 10%, #22d3ee 90%);
+    --glow: rgba(34, 211, 238, .55);
+    --prev: rgba(209, 250, 229, .40);
+  }
+  [data-theme="mono"] {
+    --grad: linear-gradient(100deg, #ffffff, #ffffff);
+    --glow: rgba(0, 0, 0, .9);
+    --prev: rgba(255, 255, 255, .45);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: transparent; overflow: hidden; }
+  body {
+    font-family: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* 底部渐变衬底（透明度可调，提高游戏画面上的可读性） */
+  #scrim {
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(120% 90% at 50% 115%, rgba(8, 10, 18, var(--bg)) 30%, transparent 72%),
+      radial-gradient(120% 70% at 50% -15%, rgba(8, 10, 18, calc(var(--bg) * .5)) 20%, transparent 65%);
+    pointer-events: none;
+  }
+
+  /* 歌词区 */
+  #stage {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+    gap: 10px; padding: 14px 26px;
+  }
+  .line {
+    max-width: 100%;
+    text-align: center;
+    font-weight: 900;
+    line-height: 1.28;
+    letter-spacing: .02em;
+    word-break: break-all;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  #prev {
+    font-size: calc(var(--fs) * .48);
+    color: var(--prev);
+    filter: blur(.4px);
+    transition: opacity .45s ease;
+    min-height: .2em;
+  }
+  #now {
+    font-size: var(--fs);
+    filter: drop-shadow(0 2px 22px var(--glow)) drop-shadow(0 0 2px rgba(0,0,0,.35));
+  }
+  [data-theme="mono"] #now {
+    text-shadow:
+      0 3px 6px rgba(0,0,0,.85), 0 0 2px rgba(0,0,0,.9),
+      2px 0 0 rgba(0,0,0,.55), -2px 0 0 rgba(0,0,0,.55),
+      0 2px 0 rgba(0,0,0,.55), 0 -2px 0 rgba(0,0,0,.55);
+    filter: none;
+  }
+  #now .txt {
+    background: var(--grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  [data-theme="mono"] #now .txt { -webkit-text-fill-color: #fff; background: none; }
+
+  @keyframes lyric-in {
+    from { opacity: 0; transform: translateY(20px) scale(.965); filter: blur(7px); }
+    to   { opacity: 1; transform: none; filter: blur(0); }
+  }
+  #now.pop { animation: lyric-in .38s cubic-bezier(.2, .7, .3, 1); }
+
+  /* 状态指示 */
+  #status {
+    position: fixed; right: 12px; bottom: 9px;
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; color: rgba(255,255,255,.75);
+    text-shadow: 0 1px 3px rgba(0,0,0,.8);
+    opacity: .9; pointer-events: none;
+    transition: opacity .3s;
+  }
+  body:not(:hover) #status.has-detail { opacity: .95; }
+  body:not(:hover) #status { opacity: .55; }
+  #dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--dot);
+    box-shadow: 0 0 8px var(--dot);
+  }
+  @keyframes pulse { 50% { opacity: .35; } }
+  #dot.busy { animation: pulse 1.6s ease-in-out infinite; }
+
+  /* 悬停工具栏 */
+  #toolbar {
+    position: fixed; top: 10px; right: 12px;
+    display: flex; gap: 6px;
+    opacity: 0; transform: translateY(-8px);
+    transition: opacity .18s, transform .18s;
+    pointer-events: none;
+  }
+  body:hover #toolbar { opacity: 1; transform: none; pointer-events: auto; }
+  #toolbar button {
+    width: 34px; height: 34px;
+    border: 1px solid rgba(255,255,255,.16);
+    border-radius: 10px;
+    background: rgba(18, 22, 34, .72);
+    color: #e7eaf3; font-size: 15px;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    transition: background .15s, transform .1s;
+  }
+  #toolbar button:hover { background: rgba(52, 60, 88, .85); }
+  #toolbar button:active { transform: scale(.94); }
+  #toolbar button.warn:hover { background: rgba(120, 40, 50, .85); }
+
+  /* 设置面板 */
+  #settings {
+    position: fixed; inset: 0;
+    background: rgba(11, 14, 22, .55);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+  }
+  #settings.hidden { display: none; }
+  .panel {
+    width: min(520px, 92vw); max-height: 88vh; overflow-y: auto;
+    background: rgba(16, 19, 30, .93);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 18px;
+    padding: 22px 24px;
+    color: #dde2ee;
+    box-shadow: 0 24px 70px rgba(0,0,0,.55);
+    -webkit-user-select: text; user-select: text;
+  }
+  .panel h2 {
+    font-size: 16px; margin-bottom: 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    letter-spacing: .04em;
+  }
+  .panel h2 button { background: none; border: none; color: #9aa3b8; font-size: 18px; cursor: pointer; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .row label { flex: 0 0 92px; font-size: 13px; color: #a7afc4; }
+  .row .val { flex: 0 0 44px; text-align: right; font-size: 12px; color: #8f97ad; font-variant-numeric: tabular-nums; }
+  .row select, .row input[type="text"], .row input[type="password"], .row input[type="number"] {
+    flex: 1; min-width: 0;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 8px;
+    color: #e8ebf5; font-size: 13px;
+    padding: 7px 10px;
+    outline: none;
+  }
+  .row select:focus, .row input:focus { border-color: rgba(139, 151, 246, .7); }
+  .row input[type="range"] { flex: 1; accent-color: #7c8cf6; }
+  .row input[type="checkbox"] { width: 16px; height: 16px; accent-color: #7c8cf6; }
+  .hint { font-size: 11.5px; color: #7d8598; margin: -6px 0 12px 102px; line-height: 1.5; }
+  .divider { border: none; border-top: 1px solid rgba(255,255,255,.09); margin: 16px 0 14px; }
+  .actions { display: flex; gap: 10px; margin-top: 18px; }
+  .actions button {
+    flex: 1; padding: 10px 0;
+    border-radius: 10px; border: none;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: filter .15s;
+  }
+  .actions button:hover { filter: brightness(1.15); }
+  #btn-start-stop { background: linear-gradient(100deg, #10b981, #059669); color: #fff; }
+  #btn-start-stop.running { background: linear-gradient(100deg, #ef4444, #dc2626); }
+  #btn-save { background: rgba(255,255,255,.1); color: #dde2ee; border: 1px solid rgba(255,255,255,.18) !important; }
+  #btn-test { background: rgba(255,255,255,.1); color: #dde2ee; border: 1px solid rgba(255,255,255,.18) !important; flex: 0 0 110px; }
+  .test-result { font-size: 12px; margin-top: 8px; min-height: 1em; }
+  .test-result.ok { color: #34d399; }
+  .test-result.bad { color: #f87171; }
+  code.kbd {
+    background: rgba(255,255,255,.1); border-radius: 5px;
+    padding: 1px 7px; font-size: 12px; font-family: Consolas, monospace;
+  }
+  .obs-url {
+    font-size: 12px; color: #8fd0ff; cursor: pointer;
+    text-decoration: underline dotted;
+  }
+</style>
+</head>
+<body data-theme="aurora">
+
+  <div id="scrim"></div>
+
+  <main id="stage" data-tauri-drag-region>
+    <div id="prev" class="line"></div>
+    <div id="now" class="line"><span class="txt" id="now-txt"></span></div>
+  </main>
+
+  <div id="status">
+    <span id="dot"></span>
+    <span id="status-text">未开始</span>
+  </div>
+
+  <div id="toolbar">
+    <button id="btn-pause" title="暂停 / 继续（全局热键）">⏸</button>
+    <button id="btn-fminus" title="缩小字号">A−</button>
+    <button id="btn-fplus" title="放大字号">A+</button>
+    <button id="btn-theme" title="切换主题">🎨</button>
+    <button id="btn-settings" title="设置">⚙</button>
+    <button id="btn-close" class="warn" title="退出">✕</button>
+  </div>
+
+  <div id="settings" class="hidden">
+    <div class="panel">
+      <h2>设置 <button id="btn-close-settings">✕</button></h2>
+
+      <div class="row">
+        <label>声源</label>
+        <select id="sel-source">
+          <option value="mic">🎤 麦克风（推荐，省配额）</option>
+          <option value="system">🔊 系统声音（回录输出）</option>
+        </select>
+      </div>
+      <div class="row" id="row-input-device">
+        <label>麦克风</label>
+        <select id="sel-input-device"><option value="">（默认设备）</option></select>
+      </div>
+      <div class="row" id="row-loopback-device" style="display:none">
+        <label>输出设备</label>
+        <select id="sel-loopback-device"><option value="">（默认设备）</option></select>
+      </div>
+      <div class="hint">麦克风有自然停顿，断句准、配额省；系统声音在持续音乐下会持续消耗配额。</div>
+
+      <hr class="divider">
+
+      <div class="row">
+        <label>语言</label>
+        <select id="sel-language">
+          <option value="zh">中文（zh）</option>
+          <option value="en">英语（en）</option>
+          <option value="ja">日语（ja）</option>
+          <option value="ko">韩语（ko）</option>
+          <option value="auto">自动检测</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>API Key</label>
+        <input type="password" id="in-apikey" placeholder="留空使用 mmx CLI 登录密钥" autocomplete="off">
+        <button id="btn-test">测试连接</button>
+      </div>
+      <div class="hint" id="key-hint"></div>
+      <div class="test-result" id="test-result"></div>
+
+      <div class="row">
+        <label>断句段长</label>
+        <input type="range" id="rg-segment" min="1" max="4" step="0.5" value="2">
+        <span class="val" id="segment-val">2.0s</span>
+      </div>
+      <div class="hint">段长越短字幕越快出，但句子更碎。静音自动断句不受此限制。</div>
+
+      <hr class="divider">
+
+      <div class="row">
+        <label>主题</label>
+        <select id="sel-theme">
+          <option value="aurora">极光（青紫粉渐变）</option>
+          <option value="sunset">落日（金橙粉渐变）</option>
+          <option value="neon">霓虹（绿青渐变）</option>
+          <option value="mono">纯白描边（通用）</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>字号</label>
+        <input type="range" id="rg-font" min="24" max="160" step="2" value="72">
+        <span class="val" id="font-val">72px</span>
+      </div>
+      <div class="row">
+        <label>背景衬底</label>
+        <input type="range" id="rg-bg" min="0" max="100" step="5" value="0">
+        <span class="val" id="bg-val">0%</span>
+      </div>
+      <div class="hint">游戏画面上建议 20%–40%，提高可读性。</div>
+
+      <hr class="divider">
+
+      <div class="row">
+        <label>OBS 接入</label>
+        <input type="checkbox" id="ck-obs" checked style="flex:none">
+        <span class="obs-url" id="obs-url" title="点击复制"></span>
+      </div>
+      <div class="hint">在 OBS 添加「浏览器源」，填入上面的地址即可同步歌词；也可直接「窗口采集」本窗口。改动端口需重启程序。</div>
+      <div class="row">
+        <label>暂停热键</label>
+        <input type="text" id="in-hotkey" value="Ctrl+Alt+L">
+      </div>
+
+      <div class="actions">
+        <button id="btn-start-stop">开始识别</button>
+        <button id="btn-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  var T = window.__TAURI__ || null;
+  var isDesktop = !!(T && T.core && T.core.invoke);
+  var invoke = isDesktop ? T.core.invoke : function () { return Promise.reject('desktop only'); };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var state = {
+    settings: null,
+    running: false,
+    paused: false,
+    saveTimer: null,
+    rectTimer: null,
+  };
+
+  /* ---------- 外观应用 ---------- */
+  function applyLook(s) {
+    document.body.dataset.theme = s.theme || 'aurora';
+    document.documentElement.style.setProperty('--fs', (s.fontSize || 72) + 'px');
+    document.documentElement.style.setProperty('--bg', (s.bgOpacity || 0));
+    $('rg-font').value = s.fontSize || 72;
+    $('font-val').textContent = Math.round(s.fontSize || 72) + 'px';
+    $('rg-bg').value = Math.round((s.bgOpacity || 0) * 100);
+    $('bg-val').textContent = Math.round((s.bgOpacity || 0) * 100) + '%';
+    $('sel-theme').value = s.theme || 'aurora';
+  }
+
+  /* ---------- 歌词渲染 ---------- */
+  function onText(text) {
+    if (!text) return;
+    var prev = $('prev'), now = $('now'), nowTxt = $('now-txt');
+    prev.textContent = nowTxt.textContent;
+    nowTxt.textContent = text.length > 90 ? text.slice(0, 90) + '…' : text;
+    now.classList.remove('pop');
+    void now.offsetWidth; // 重触发入场动画
+    now.classList.add('pop');
+  }
+
+  /* ---------- 状态渲染 ---------- */
+  var STATE_META = {
+    idle:      { color: '#9ca3af', label: '未开始',     busy: false },
+    listening: { color: '#34d399', label: '监听中',     busy: true  },
+    sending:   { color: '#60a5fa', label: '识别中',     busy: true  },
+    ok:        { color: '#34d399', label: '监听中',     busy: false },
+    retry:     { color: '#fbbf24', label: '重试中',     busy: true  },
+    paused:    { color: '#c084fc', label: '已暂停',     busy: false },
+    error:     { color: '#f87171', label: '出错',       busy: false },
+  };
+  function onStatus(p) {
+    var meta = STATE_META[p.state] || STATE_META.idle;
+    var dot = $('dot');
+    dot.style.background = meta.color;
+    dot.style.boxShadow = '0 0 8px ' + meta.color;
+    dot.classList.toggle('busy', meta.busy);
+    $('status-text').textContent = p.detail ? meta.label + ' · ' + p.detail : meta.label;
+    $('status').classList.toggle('has-detail', !!p.detail);
+    if (p.state === 'paused') state.paused = true;
+    if (p.state === 'listening') { state.paused = false; state.running = true; }
+    if (p.state === 'idle') { state.running = false; state.paused = false; }
+    syncPauseBtn();
+    syncStartBtn();
+  }
+
+  function syncPauseBtn() {
+    $('btn-pause').textContent = state.paused ? '▶' : '⏸';
+  }
+  function syncStartBtn() {
+    var b = $('btn-start-stop');
+    b.textContent = state.running ? '停止识别' : '开始识别';
+    b.classList.toggle('running', state.running);
+  }
+
+  /* ---------- 保存（防抖） ---------- */
+  function collectSettings() {
+    var s = JSON.parse(JSON.stringify(state.settings || {}));
+    s.source = $('sel-source').value;
+    s.inputDevice = $('sel-input-device').value || null;
+    s.loopbackDevice = $('sel-loopback-device').value || null;
+    s.language = $('sel-language').value;
+    var key = $('in-apikey').value.trim();
+    // 空且已有自定义 Key → "__keep__" 哨兵：后端保持旧值；否则空 = 回退 mmx 登录密钥
+    s.apiKey = key ? key : ((state.settings && state.settings.apiKeySet) ? '__keep__' : null);
+    s.segmentSeconds = parseFloat($('rg-segment').value);
+    s.theme = $('sel-theme').value;
+    s.fontSize = parseFloat($('rg-font').value);
+    s.bgOpacity = parseInt($('rg-bg').value, 10) / 100;
+    s.obsEnabled = $('ck-obs').checked;
+    s.hotkey = $('in-hotkey').value.trim() || 'Ctrl+Alt+L';
+    return s;
+  }
+  function saveSoon() {
+    clearTimeout(state.saveTimer);
+    state.saveTimer = setTimeout(function () {
+      invoke('cmd_set_settings', { settings: collectSettings() }).catch(showErr);
+    }, 500);
+  }
+  function showErr(e) { console.error(e); $('test-result').className = 'test-result bad'; $('test-result').textContent = String(e); }
+
+  /* ---------- 桌面端初始化 ---------- */
+  function initDesktop() {
+    invoke('cmd_get_settings').then(function (s) {
+      state.settings = s;
+      applyLook(s);
+      state.running = !!s.running;
+      state.paused = !!s.paused;
+      $('sel-source').value = s.source || 'mic';
+      $('sel-language').value = s.language || 'zh';
+      $('rg-segment').value = s.segmentSeconds || 2;
+      $('segment-val').textContent = (s.segmentSeconds || 2).toFixed(1) + 's';
+      $('in-apikey').value = '';
+      $('in-apikey').placeholder = s.apiKeySet
+        ? '已设置自定义 Key（留空保持不变）'
+        : (s.mmxKeyFound ? '留空使用 mmx CLI 登录密钥 ✓' : '未检测到 mmx 登录，请填写 Key');
+      $('key-hint').textContent = s.mmxKeyFound
+        ? '已检测到 mmx CLI 登录（~/.mmx/config.json），留空即可直接使用。'
+        : '未检测到 mmx CLI 登录。安装 mmx 后执行 mmx auth login --api-key sk-xxx，或在此填写 Key。';
+      $('ck-obs').checked = !!s.obsEnabled;
+      $('in-hotkey').value = s.hotkey || 'Ctrl+Alt+L';
+      syncPauseBtn(); syncStartBtn();
+      loadDevices();
+      refreshObsUrl();
+    }).catch(showErr);
+
+    T.event.listen('asr://text', function (e) { onText(e.payload.text); });
+    T.event.listen('asr://status', function (e) { onStatus(e.payload); });
+    T.event.listen('asr://settings', function (e) { applyLook(e.payload); });
+
+    // 窗口位置持久化
+    var win = T.window.getCurrentWindow();
+    var saveRect = function () {
+      clearTimeout(state.rectTimer);
+      state.rectTimer = setTimeout(function () {
+        Promise.all([win.outerPosition(), win.outerSize()]).then(function (r) {
+          var p = r[0], s = r[1];
+          invoke('cmd_save_window', {
+            rect: { x: p.x, y: p.y, width: s.width, height: s.height }
+          }).catch(function () {});
+        });
+      }, 800);
+    };
+    win.onMoved(saveRect);
+    win.onResized(saveRect);
+
+    bindCommon();
+  }
+
+  function loadDevices() {
+    invoke('cmd_list_devices').then(function (d) {
+      fillSelect($('sel-input-device'), d.inputs, '（默认设备）');
+      fillSelect($('sel-loopback-device'), d.loopbacks, '（默认设备）');
+      if (state.settings && state.settings.inputDevice) $('sel-input-device').value = state.settings.inputDevice;
+      if (state.settings && state.settings.loopbackDevice) $('sel-loopback-device').value = state.settings.loopbackDevice;
+    }).catch(function () {});
+  }
+  function fillSelect(sel, names, placeholder) {
+    var prev = sel.value;
+    sel.innerHTML = '';
+    var opt = document.createElement('option');
+    opt.value = ''; opt.textContent = placeholder;
+    sel.appendChild(opt);
+    (names || []).forEach(function (n) {
+      var o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      sel.appendChild(o);
+    });
+    if (prev) sel.value = prev;
+  }
+  function refreshObsUrl() {
+    invoke('cmd_obs_url').then(function (url) {
+      $('obs-url').textContent = url || '（未启用）';
+    }).catch(function () {});
+  }
+
+  /* ---------- OBS 浏览器源初始化（无 Tauri API） ---------- */
+  function initBrowser() {
+    document.getElementById('toolbar').style.display = 'none';
+    var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    var ws;
+    var connect = function () {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = function (ev) {
+        var m;
+        try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (m.type === 'text') onText(m.text);
+        else if (m.type === 'status') onStatus(m);
+        else if (m.type === 'settings') applyLook(m);
+      };
+      ws.onclose = function () { setTimeout(connect, 1500); };
+    };
+    connect();
+  }
+
+  /* ---------- 公共交互 ---------- */
+  function bindCommon() {
+    $('sel-source').addEventListener('change', function () {
+      var mic = $('sel-source').value === 'mic';
+      $('row-input-device').style.display = mic ? '' : 'none';
+      $('row-loopback-device').style.display = mic ? 'none' : '';
+    });
+    $('sel-source').dispatchEvent(new Event('change'));
+
+    $('rg-segment').addEventListener('input', function () {
+      $('segment-val').textContent = parseFloat(this.value).toFixed(1) + 's';
+    });
+
+    ['rg-font', 'rg-bg'].forEach(function (id) {
+      $(id).addEventListener('input', function () {
+        var s = collectSettings();
+        applyLook(s);
+        saveSoon();
+      });
+    });
+    $('sel-theme').addEventListener('change', function () { applyLook(collectSettings()); saveSoon(); });
+
+    $('btn-fminus').addEventListener('click', function () { stepFont(-6); });
+    $('btn-fplus').addEventListener('click', function () { stepFont(6); });
+    function stepFont(d) {
+      var el = $('rg-font');
+      el.value = Math.max(24, Math.min(160, parseInt(el.value, 10) + d));
+      var s = collectSettings(); applyLook(s); saveSoon();
+    }
+
+    var THEMES = ['aurora', 'sunset', 'neon', 'mono'];
+    $('btn-theme').addEventListener('click', function () {
+      var cur = document.body.dataset.theme || 'aurora';
+      var next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+      $('sel-theme').value = next;
+      applyLook(collectSettings()); saveSoon();
+    });
+
+    $('btn-pause').addEventListener('click', function () {
+      invoke('cmd_pause_toggle').catch(showErr);
+    });
+
+    $('btn-settings').addEventListener('click', function () {
+      $('settings').classList.remove('hidden');
+    });
+    $('btn-close-settings').addEventListener('click', function () {
+      $('settings').classList.add('hidden');
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') $('settings').classList.add('hidden');
+    });
+
+    $('btn-close').addEventListener('click', function () {
+      T.window.getCurrentWindow().close();
+    });
+
+    $('btn-test').addEventListener('click', function () {
+      // 先保存当前表单（key 可能刚填）
+      var tr = $('test-result');
+      tr.className = 'test-result'; tr.textContent = '测试中…';
+      invoke('cmd_set_settings', { settings: collectSettings() }).then(function () {
+        return invoke('cmd_test_api');
+      }).then(function (msg) {
+        tr.className = 'test-result ok'; tr.textContent = '✓ ' + msg;
+      }).catch(function (e) {
+        tr.className = 'test-result bad'; tr.textContent = '✗ ' + e;
+      });
+    });
+
+    $('btn-start-stop').addEventListener('click', function () {
+      invoke('cmd_set_settings', { settings: collectSettings() }).then(function () {
+        return invoke(state.running ? 'cmd_stop' : 'cmd_start');
+      }).then(function () {
+        state.running = !state.running;
+        syncStartBtn();
+      }).catch(showErr);
+    });
+
+    $('btn-save').addEventListener('click', function () {
+      invoke('cmd_set_settings', { settings: collectSettings() }).then(function () {
+        $('settings').classList.add('hidden');
+      }).catch(showErr);
+    });
+
+    $('obs-url').addEventListener('click', function () {
+      var text = this.textContent;
+      if (navigator.clipboard) navigator.clipboard.writeText(text);
+      this.textContent = '已复制 ✓';
+      var el = this;
+      setTimeout(function () { refreshObsUrl(); }, 900);
+    });
+
+    // 声源/设备/语言/段长/obs 等改动即存（采集相关改动若在运行会自动重启管线）
+    ['sel-source', 'sel-input-device', 'sel-loopback-device', 'sel-language', 'rg-segment', 'ck-obs', 'in-hotkey']
+      .forEach(function (id) {
+        $(id).addEventListener('change', saveSoon);
+      });
+    $('in-apikey').addEventListener('change', saveSoon);
+  }
+
+  if (isDesktop) initDesktop();
+  else initBrowser();
+})();
+</script>
+</body>
+</html>

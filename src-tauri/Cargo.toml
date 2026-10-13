@@ -1,0 +1,26 @@
+[package]
+name = "mmx-live-lyrics"
+version = "0.1.0"
+description = "直播实时歌词字幕（mmx ASR）"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# ureq 2.x：同步 HTTP + rustls，体积极小；multipart 手工构造，无额外依赖
+ureq = { version = "2", features = ["json"] }
+# cpal 的 WASAPI 后端对渲染设备调用 build_input_stream 时自动加 LOOPBACK 标志，
+# 麦克风与系统声音回录走同一条代码路径，无需 wasapi crate
+cpal = "0.15"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "s"
