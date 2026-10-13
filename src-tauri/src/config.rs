@@ -137,7 +137,7 @@ impl Default for Settings {
             hist_color: d_hist_color(),
             hist_opacity: d_hist_opacity(),
             presets: Vec::new(),
-            auto_start: true,
+            auto_start: false,
             hotkey: "Ctrl+Alt+L".into(),
             window: None,
         }
@@ -163,11 +163,10 @@ pub fn load() -> Settings {
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
-    // 旧格式（单 source 字段）迁移：默认改为"双开 + 自动识别"，并立即回写新格式
+    // 旧格式（单 source 字段）迁移到双开关新格式，立即回写；auto_start 保持用户已有值/默认关
     if let Some(raw) = &raw {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
             if v.get("mic_enabled").is_none() {
-                s.auto_start = true;
                 let _ = save(&s);
             }
         }
