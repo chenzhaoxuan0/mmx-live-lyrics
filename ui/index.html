@@ -13,6 +13,8 @@
     --oc: #000000;
     --ow: 0px;
     --bgc: rgba(8, 10, 18, 0);
+    --hfs: 40px;
+    --hist-c: rgba(255, 255, 255, .45);
     --dot: #9ca3af;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -25,52 +27,59 @@
   /* 背景：颜色 + 透明度可调（--bgc 由 JS 计算） */
   #scrim { position: fixed; inset: 0; background: var(--bgc); pointer-events: none; }
 
-  /* 歌词区 */
+  /* 字幕区：底行实时 + 上方历史，整体底部对齐 */
   #stage {
     position: fixed; inset: 0;
     display: flex; flex-direction: column;
-    justify-content: center; align-items: center;
-    gap: 10px; padding: 14px 26px;
+    justify-content: flex-end; align-items: center;
+    padding: 14px 26px;
   }
-  .line {
-    max-width: 100%;
-    text-align: center;
+
+  /* 历史区：固定行数高度，溢出在顶部裁掉；内部 translateY 始终显示最新部分 */
+  #hist-wrap {
+    width: 100%;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+  #hist {
+    font-size: var(--hfs);
+    color: var(--hist-c);
+    font-weight: 500;
+    line-height: 1.5;
+    text-align: left;              /* 像普通文本：从左到右、顶满换行 */
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+    transition: transform .55s cubic-bezier(.25, .6, .3, 1);
+    will-change: transform;
+  }
+
+  /* 实时行（底行） */
+  #now {
+    width: 100%;
+    font-size: var(--fs);
     font-weight: 900;
+    position: relative;
+    text-align: center;
     line-height: 1.28;
     letter-spacing: .02em;
-    word-break: break-all;
+  }
+  #now .stroke, #now .txt {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     overflow: hidden;
-  }
-  #prev {
-    font-size: calc(var(--fs) * .48);
-    color: rgba(255, 255, 255, .38);
-    filter: blur(.4px);
-    transition: opacity .45s ease;
-    min-height: .2em;
-  }
-  #now { font-size: var(--fs); position: relative; width: 100%; }
-
-  /* 双层文字：描边层在下，渐变填充层在上 */
-  #now .stroke, #now .txt {
-    display: block;
     width: 100%;
     text-align: center;
     line-height: 1.28;
     letter-spacing: .02em;
     word-break: break-all;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow: hidden;
   }
   #now .stroke {
     position: absolute; inset: 0;
     color: var(--oc);
     -webkit-text-stroke: var(--ow) var(--oc);
-    visibility: hidden; /* 描边宽为 0 时隐藏 */
+    visibility: hidden;
   }
   body.has-outline #now .stroke { visibility: visible; }
   #now .txt {
@@ -80,12 +89,12 @@
     background-clip: text;
     color: transparent;
   }
-  #now.pop { animation: lyric-in .38s cubic-bezier(.2, .7, .3, 1); }
   #now {
     filter: drop-shadow(0 2px var(--glow-b) var(--glow-c)) drop-shadow(0 1px 2px rgba(0,0,0,.35));
   }
+  #now.pop { animation: lyric-in .38s cubic-bezier(.2, .7, .3, 1); }
   @keyframes lyric-in {
-    from { opacity: 0; transform: translateY(20px) scale(.965); filter: blur(7px); }
+    from { opacity: 0; transform: translateY(16px) scale(.985); filter: blur(6px); }
     to   { opacity: 1; transform: none; filter: blur(0); }
   }
 
@@ -147,9 +156,8 @@
   #toolbar button.warn:hover { background: rgba(120, 40, 50, .85); }
   #toolbar button.run { color: #6ee7b7; font-size: 16px; }
   #toolbar button.run.on { color: #fca5a5; }
-  #toolbar button:disabled { opacity: .35; cursor: default; }
 
-  /* ============ 设置面板（分页展开式） ============ */
+  /* ============ 设置面板 ============ */
   #settings {
     position: fixed; inset: 0;
     background: rgba(11, 14, 22, .55);
@@ -257,8 +265,8 @@
   <div id="scrim"></div>
 
   <main id="stage" data-tauri-drag-region>
-    <div id="prev" class="line"></div>
-    <div id="now" class="line">
+    <div id="hist-wrap"><div id="hist"></div></div>
+    <div id="now">
       <span class="stroke" id="now-stroke" aria-hidden="true"></span>
       <span class="txt" id="now-txt"></span>
     </div>
@@ -273,7 +281,6 @@
 
   <div id="toolbar">
     <button id="btn-run" class="run" title="开始 / 停止识别">▶</button>
-    <button id="btn-pause" title="暂停 / 继续（全局热键）" disabled>⏸</button>
     <button id="btn-fminus" title="缩小字号">A−</button>
     <button id="btn-fplus" title="放大字号">A+</button>
     <button id="btn-settings" title="设置">⚙</button>
@@ -350,7 +357,7 @@
           </div>
           <div class="hint">选择内置或已存预设立即应用；调整下方任意参数后可另存为自己的预设。所有改动自动保存。</div>
 
-          <div class="section-title">文字</div>
+          <div class="section-title">实时字幕（底行）</div>
           <div class="grid2">
             <div class="row">
               <label>字体</label>
@@ -376,16 +383,9 @@
               <input type="range" id="rg-font" min="24" max="200" step="2" value="72">
               <span class="val" id="font-val">72px</span>
             </div>
-            <div class="row">
-              <label>上一句</label>
-              <select id="sel-show-prev">
-                <option value="1">显示（歌词式）</option>
-                <option value="0">隐藏（只看当前句）</option>
-              </select>
-            </div>
           </div>
 
-          <div class="section-title">文字颜色（渐变，两端同色即为纯色）</div>
+          <div class="section-title">实时字幕颜色（渐变，两端同色即纯色）</div>
           <div class="grid2">
             <div class="row">
               <label>起始色</label>
@@ -404,7 +404,7 @@
             </div>
           </div>
 
-          <div class="section-title">描边</div>
+          <div class="section-title">实时字幕描边 / 光晕</div>
           <div class="grid2">
             <div class="row">
               <label>描边颜色</label>
@@ -416,10 +416,6 @@
               <input type="range" id="rg-outline" min="0" max="10" step="0.5" value="0">
               <span class="val" id="outline-val">0px</span>
             </div>
-          </div>
-
-          <div class="section-title">光晕 / 背景</div>
-          <div class="grid2">
             <div class="row">
               <label>光晕颜色</label>
               <input type="color" id="in-glow-color" value="#8b5cf6">
@@ -430,6 +426,37 @@
               <input type="range" id="rg-glow" min="0" max="50" step="1" value="22">
               <span class="val" id="glow-val">22px</span>
             </div>
+          </div>
+
+          <div class="section-title">历史字幕（上方堆叠区，独立外观）</div>
+          <div class="grid2">
+            <div class="row">
+              <label>显示历史</label>
+              <select id="sel-show-prev">
+                <option value="1">显示（底行实时 + 上方历史）</option>
+                <option value="0">仅当前句（单行模式）</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>历史字号</label>
+              <input type="range" id="rg-hist-font" min="12" max="100" step="1" value="40">
+              <span class="val" id="hist-font-val">40px</span>
+            </div>
+            <div class="row">
+              <label>历史颜色</label>
+              <input type="color" id="in-hist-color" value="#ffffff">
+              <span class="color-hex" id="hex-hist">#ffffff</span>
+            </div>
+            <div class="row">
+              <label>历史不透明</label>
+              <input type="range" id="rg-hist-opacity" min="0" max="100" step="5" value="45">
+              <span class="val" id="hist-opacity-val">45%</span>
+            </div>
+          </div>
+          <div class="hint">历史区行数由窗口高度与字号自动决定；句子像文本一样从左到右排列、逐行上顶，超出窗口顶部即消失。看实时语音盯底行，找历史内容往上看。</div>
+
+          <div class="section-title">背景</div>
+          <div class="grid2">
             <div class="row">
               <label>背景颜色</label>
               <input type="color" id="in-bg-color" value="#080a12">
@@ -441,7 +468,7 @@
               <span class="val" id="bg-val">0%</span>
             </div>
           </div>
-          <div class="hint">游戏画面上建议背景 20%–40% 不透明度提高可读性；浅色文字配深背景、深色文字配浅背景。</div>
+          <div class="hint">游戏画面上建议背景 20%–40% 不透明度提高可读性。</div>
         </div>
 
         <!-- ============ 接入 ============ -->
@@ -451,12 +478,12 @@
             <input type="checkbox" id="ck-obs" checked style="flex:none">
             <span class="obs-url" id="obs-url" title="点击复制"></span>
           </div>
-          <div class="hint">在 OBS 添加「浏览器源」，填入上面的地址即可同步歌词（主题字号自动跟随）；也可直接「窗口采集」本窗口。</div>
+          <div class="hint">在 OBS 添加「浏览器源」，填入上面的地址即可同步歌词（外观自动跟随）；也可直接「窗口采集」本窗口。</div>
           <div class="row">
-            <label>暂停热键</label>
+            <label>开关键</label>
             <input type="text" id="in-hotkey" value="Ctrl+Alt+L">
           </div>
-          <div class="hint">全局快捷键，随时暂停/继续字幕输出。修改后保存生效。</div>
+          <div class="hint">全局快捷键，一键 开始/停止 识别。</div>
           <div class="row">
             <label>开机自启</label>
             <select id="sel-autostart">
@@ -484,17 +511,21 @@
   var invoke = isDesktop ? T.core.invoke : function () { return Promise.reject('desktop only'); };
 
   var $ = function (id) { return document.getElementById(id); };
-  var state = { settings: null, running: false, paused: false, saveTimer: null, rectTimer: null };
+  var state = {
+    settings: null, running: false, saveTimer: null, rectTimer: null,
+    histSentences: [], histRows: 0
+  };
 
   /* ---------- 外观字段 ---------- */
   var LOOK_FIELDS = ['fontFamily', 'fontSize', 'fontWeight', 'color1', 'color2', 'gradAngle',
-    'outlineColor', 'outlineWidth', 'glowColor', 'glowStrength', 'bgColor', 'bgOpacity', 'showPrev'];
+    'outlineColor', 'outlineWidth', 'glowColor', 'glowStrength', 'bgColor', 'bgOpacity',
+    'showPrev', 'histFontSize', 'histColor', 'histOpacity'];
 
   var BUILTIN_PRESETS = {
-    'aurora': { label: '极光（青紫粉渐变）', fontSize: 72, fontWeight: 900, color1: '#67e8f9', color2: '#f0abfc', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#8b5cf6', glowStrength: 22, bgColor: '#080a12', bgOpacity: 0, showPrev: true, fontFamily: null },
-    'sunset': { label: '落日（金橙粉渐变）', fontSize: 72, fontWeight: 900, color1: '#fde68a', color2: '#f43f5e', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#fb7185', glowStrength: 22, bgColor: '#1a0e10', bgOpacity: 0, showPrev: true, fontFamily: null },
-    'neon': { label: '霓虹（绿青渐变）', fontSize: 72, fontWeight: 900, color1: '#4ade80', color2: '#22d3ee', gradAngle: 100, outlineColor: '#03130f', outlineWidth: 0, glowColor: '#22d3ee', glowStrength: 28, bgColor: '#06110f', bgOpacity: 0, showPrev: true, fontFamily: null },
-    'mono': { label: '纯白黑描边（通用）', fontSize: 72, fontWeight: 900, color1: '#ffffff', color2: '#ffffff', gradAngle: 100, outlineColor: '#000000', outlineWidth: 3.5, glowColor: '#000000', glowStrength: 10, bgColor: '#080a12', bgOpacity: 0, showPrev: true, fontFamily: null }
+    'aurora': { label: '极光（青紫粉渐变）', fontSize: 72, fontWeight: 900, color1: '#67e8f9', color2: '#f0abfc', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#8b5cf6', glowStrength: 22, bgColor: '#080a12', bgOpacity: 0, showPrev: true, histFontSize: 40, histColor: '#ffffff', histOpacity: 0.45, fontFamily: null },
+    'sunset': { label: '落日（金橙粉渐变）', fontSize: 72, fontWeight: 900, color1: '#fde68a', color2: '#f43f5e', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#fb7185', glowStrength: 22, bgColor: '#1a0e10', bgOpacity: 0, showPrev: true, histFontSize: 40, histColor: '#fde68a', histOpacity: 0.45, fontFamily: null },
+    'neon': { label: '霓虹（绿青渐变）', fontSize: 72, fontWeight: 900, color1: '#4ade80', color2: '#22d3ee', gradAngle: 100, outlineColor: '#03130f', outlineWidth: 0, glowColor: '#22d3ee', glowStrength: 28, bgColor: '#06110f', bgOpacity: 0, showPrev: true, histFontSize: 40, histColor: '#4ade80', histOpacity: 0.45, fontFamily: null },
+    'mono': { label: '纯白黑描边（通用）', fontSize: 72, fontWeight: 900, color1: '#ffffff', color2: '#ffffff', gradAngle: 100, outlineColor: '#000000', outlineWidth: 3.5, glowColor: '#000000', glowStrength: 10, bgColor: '#080a12', bgOpacity: 0, showPrev: true, histFontSize: 40, histColor: '#ffffff', histOpacity: 0.55, fontFamily: null }
   };
 
   function hexToRgba(hex, a) {
@@ -515,13 +546,14 @@
     r.setProperty('--ow', (s.outlineWidth || 0) + 'px');
     document.body.classList.toggle('has-outline', (s.outlineWidth || 0) > 0);
     r.setProperty('--bgc', hexToRgba(s.bgColor || '#080a12', s.bgOpacity || 0));
+    r.setProperty('--hfs', (s.histFontSize || 40) + 'px');
+    r.setProperty('--hist-c', hexToRgba(s.histColor || '#ffffff', s.histOpacity == null ? 0.45 : s.histOpacity));
     var fam = s.fontFamily && String(s.fontFamily).trim();
     document.body.style.fontFamily = fam ? '"' + fam + '", "Microsoft YaHei UI", "PingFang SC", sans-serif' : '';
     var w = s.fontWeight || 900;
-    $('prev').style.fontWeight = w;
     $('now').style.fontWeight = w;
-    $('prev').style.display = s.showPrev === false ? 'none' : '';
     syncLookInputs(s);
+    relayout();
   }
 
   function syncLookInputs(s) {
@@ -537,21 +569,63 @@
     $('rg-outline').value = s.outlineWidth || 0; $('outline-val').textContent = (s.outlineWidth || 0) + 'px';
     $('in-glow-color').value = s.glowColor || '#8b5cf6'; $('hex-glow').textContent = s.glowColor || '#8b5cf6';
     $('rg-glow').value = s.glowStrength || 0; $('glow-val').textContent = (s.glowStrength || 0) + 'px';
+    $('rg-hist-font').value = s.histFontSize || 40; $('hist-font-val').textContent = Math.round(s.histFontSize || 40) + 'px';
+    $('in-hist-color').value = s.histColor || '#ffffff'; $('hex-hist').textContent = s.histColor || '#ffffff';
+    var ho = s.histOpacity == null ? 45 : Math.round((s.histOpacity) * 100);
+    $('rg-hist-opacity').value = ho; $('hist-opacity-val').textContent = ho + '%';
     $('in-bg-color').value = s.bgColor || '#080a12'; $('hex-bg').textContent = s.bgColor || '#080a12';
     $('rg-bg').value = Math.round((s.bgOpacity || 0) * 100); $('bg-val').textContent = Math.round((s.bgOpacity || 0) * 100) + '%';
   }
 
-  /* ---------- 歌词渲染（双层：描边 + 填充） ---------- */
+  /* ---------- 布局：按窗口高度决定历史行数（最小 1 行 = 仅实时行） ---------- */
+  var HIST_LH = 1.5;  // 历史行高系数
+  function relayout() {
+    var s = state.settings || {};
+    var H = window.innerHeight - 28;                 // 上下 padding
+    var liveH = (s.fontSize || 72) * 1.28 + 14;       // 实时行 + 间距
+    var histLH = Math.round((s.histFontSize || 40) * HIST_LH);
+    var rows = 0;
+    if (s.showPrev !== false) {
+      rows = Math.max(0, Math.floor((H - liveH) / histLH));
+    }
+    state.histRows = rows;
+    var wrap = $('hist-wrap');
+    if (rows <= 0) {
+      wrap.style.display = 'none';
+    } else {
+      wrap.style.display = '';
+      wrap.style.height = (rows * histLH) + 'px';
+      positionHist();
+    }
+  }
+  function positionHist() {
+    var wrap = $('hist-wrap'), hist = $('hist');
+    if (wrap.style.display === 'none') return;
+    var over = hist.scrollHeight - wrap.clientHeight;
+    hist.style.transform = over > 0 ? 'translateY(' + (-over) + 'px)' : 'none';
+  }
+  window.addEventListener('resize', relayout);
+
+  /* ---------- 歌词渲染：底行实时，旧句进历史流 ---------- */
+  function pushHistory(t) {
+    state.histSentences.push(t);
+    if (state.histSentences.length > 400) state.histSentences.splice(0, 100);
+    $('hist').textContent = state.histSentences.join(' ');
+    requestAnimationFrame(positionHist);
+  }
+
   function onText(text) {
     if (!text) return;
+    var cur = $('now-txt').textContent;
+    if (cur) pushHistory(cur);
     var shown = text.length > 90 ? text.slice(0, 90) + '…' : text;
-    $('prev').textContent = $('now-txt').textContent;
     $('now-txt').textContent = shown;
     $('now-stroke').textContent = shown;
     var now = $('now');
     now.classList.remove('pop');
     void now.offsetWidth;
     now.classList.add('pop');
+    requestAnimationFrame(positionHist);
     syncStartHint();
   }
 
@@ -562,7 +636,6 @@
     sending:   { color: '#60a5fa', label: '识别中', busy: true  },
     ok:        { color: '#34d399', label: '监听中', busy: false },
     retry:     { color: '#fbbf24', label: '重试中', busy: true  },
-    paused:    { color: '#c084fc', label: '已暂停', busy: false },
     error:     { color: '#f87171', label: '出错',   busy: false }
   };
   function onStatus(p) {
@@ -571,9 +644,8 @@
     $('dot').style.boxShadow = '0 0 8px ' + meta.color;
     $('dot').classList.toggle('busy', meta.busy);
     $('status-text').textContent = p.detail ? meta.label + ' · ' + p.detail : meta.label;
-    if (p.state === 'paused') state.paused = true;
-    if (p.state === 'listening') { state.paused = false; state.running = true; }
-    if (p.state === 'idle') { state.running = false; state.paused = false; }
+    if (p.state === 'listening') state.running = true;
+    if (p.state === 'idle') state.running = false;
     syncRunButtons();
   }
 
@@ -581,8 +653,6 @@
     $('btn-run').textContent = state.running ? '⏹' : '▶';
     $('btn-run').classList.toggle('on', state.running);
     $('btn-run').title = state.running ? '停止识别' : '开始识别';
-    $('btn-pause').disabled = !state.running;
-    $('btn-pause').textContent = state.paused ? '▶' : '⏸';
     $('btn-start-stop').textContent = state.running ? '停止识别' : '开始识别';
     $('btn-start-stop').classList.toggle('running', state.running);
     syncStartHint();
@@ -615,6 +685,9 @@
     s.bgColor = $('in-bg-color').value;
     s.bgOpacity = parseInt($('rg-bg').value, 10) / 100;
     s.showPrev = $('sel-show-prev').value === '1';
+    s.histFontSize = parseFloat($('rg-hist-font').value);
+    s.histColor = $('in-hist-color').value;
+    s.histOpacity = parseInt($('rg-hist-opacity').value, 10) / 100;
     s.obsEnabled = $('ck-obs').checked;
     s.autoStart = $('sel-autostart').value === '1';
     s.hotkey = $('in-hotkey').value.trim() || 'Ctrl+Alt+L';
@@ -703,7 +776,6 @@
       state.settings = s;
       applyLook(s);
       state.running = !!s.running;
-      state.paused = !!s.paused;
       $('sel-source').value = s.source || 'mic';
       $('sel-source').dispatchEvent(new Event('change'));
       $('sel-language').value = s.language || 'zh';
@@ -789,7 +861,7 @@
         try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (m.type === 'text') onText(m.text);
         else if (m.type === 'status') onStatus(m);
-        else if (m.type === 'settings') applyLook(m);
+        else if (m.type === 'settings') { state.settings = m; applyLook(m); }
       };
       ws.onclose = function () { setTimeout(connect, 1500); };
     };
@@ -831,25 +903,21 @@
     $('in-apikey').addEventListener('change', saveSoon);
 
     // 外观即时预览 + 自动保存
-    var LOOK_INPUTS = ['rg-font', 'rg-angle', 'rg-outline', 'rg-glow', 'rg-bg'];
-    LOOK_INPUTS.forEach(function (id) {
+    var LOOK_RANGES = ['rg-font', 'rg-angle', 'rg-outline', 'rg-glow', 'rg-bg', 'rg-hist-font', 'rg-hist-opacity'];
+    LOOK_RANGES.forEach(function (id) {
       $(id).addEventListener('input', function () { applyLook(collectSettings()); saveSoon(); });
     });
     ['sel-weight', 'sel-show-prev', 'in-font-family'].forEach(function (id) {
       $(id).addEventListener('change', function () { applyLook(collectSettings()); saveSoon(); });
-      $(id).addEventListener('input', function () { applyLook(collectSettings()); saveSoon(); });
     });
-    ['in-color1', 'in-color2', 'in-outline-color', 'in-glow-color', 'in-bg-color'].forEach(function (id) {
+    ['in-color1', 'in-color2', 'in-outline-color', 'in-glow-color', 'in-bg-color', 'in-hist-color'].forEach(function (id) {
       $(id).addEventListener('input', function () { applyLook(collectSettings()); saveSoon(); });
     });
 
-    // 启动 / 暂停
+    // 一键开始 / 停止
     $('start-hint').addEventListener('click', toggleRun);
     $('btn-run').addEventListener('click', toggleRun);
     $('btn-start-stop').addEventListener('click', toggleRun);
-    $('btn-pause').addEventListener('click', function () {
-      invoke('cmd_pause_toggle').catch(showErr);
-    });
 
     // 工具栏字号快捷键
     function stepFont(d) {
@@ -896,8 +964,7 @@
       var text = this.textContent;
       if (navigator.clipboard) navigator.clipboard.writeText(text);
       this.textContent = '已复制 ✓';
-      var el = this;
-      setTimeout(function () { refreshObsUrl(); }, 900);
+      setTimeout(refreshObsUrl, 900);
     });
 
     bindPresetUi();

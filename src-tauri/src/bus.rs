@@ -68,6 +68,9 @@ impl Bus {
             "bgColor": s.bg_color,
             "bgOpacity": s.bg_opacity,
             "showPrev": s.show_prev,
+            "histFontSize": s.hist_font_size,
+            "histColor": s.hist_color,
+            "histOpacity": s.hist_opacity,
         });
         let json = payload.to_string();
         *self.last_snapshot.lock().unwrap() = Some(json.clone());

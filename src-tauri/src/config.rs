@@ -40,6 +40,12 @@ pub struct LookPreset {
     pub bg_opacity: f32,
     #[serde(default = "d_true")]
     pub show_prev: bool,
+    #[serde(default = "d_hist_size")]
+    pub hist_font_size: f32,
+    #[serde(default = "d_hist_color")]
+    pub hist_color: String,
+    #[serde(default = "d_hist_opacity")]
+    pub hist_opacity: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,8 +77,16 @@ pub struct Settings {
     pub glow_color: String,
     pub glow_strength: f32,
     pub bg_color: String,
+    #[serde(default)]
     pub bg_opacity: f32,
+    #[serde(default = "d_true")]
     pub show_prev: bool,
+    #[serde(default = "d_hist_size")]
+    pub hist_font_size: f32,
+    #[serde(default = "d_hist_color")]
+    pub hist_color: String,
+    #[serde(default = "d_hist_opacity")]
+    pub hist_opacity: f32,
     pub presets: Vec<LookPreset>,
     /// 启动软件后自动开始识别（等效 --start）
     pub auto_start: bool,
@@ -89,6 +103,9 @@ fn d_glow_color() -> String { "#8b5cf6".into() }
 fn d_glow_strength() -> f32 { 22.0 }
 fn d_bg_color() -> String { "#080a12".into() }
 fn d_true() -> bool { true }
+fn d_hist_size() -> f32 { 40.0 }
+fn d_hist_color() -> String { "#ffffff".into() }
+fn d_hist_opacity() -> f32 { 0.45 }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -115,6 +132,9 @@ impl Default for Settings {
             bg_color: d_bg_color(),
             bg_opacity: 0.0,
             show_prev: true,
+            hist_font_size: d_hist_size(),
+            hist_color: d_hist_color(),
+            hist_opacity: d_hist_opacity(),
             presets: Vec::new(),
             auto_start: false,
             hotkey: "Ctrl+Alt+L".into(),

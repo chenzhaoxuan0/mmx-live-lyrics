@@ -26,7 +26,7 @@ impl Pipeline {
     }
 }
 
-pub fn start(bus: Arc<Bus>, paused: Arc<AtomicBool>, settings: Settings) -> Result<Pipeline, String> {
+pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let (btx, brx) = mpsc::channel::<AudioBlock>();
     let (stx, srx) = mpsc::channel::<Vec<f32>>();
@@ -48,7 +48,6 @@ pub fn start(bus: Arc<Bus>, paused: Arc<AtomicBool>, settings: Settings) -> Resu
 
     // 2) 引擎线程：混音 → 低通 → 重采样到 16k → VAD 分段
     let stop_e = stop.clone();
-    let paused_e = paused.clone();
     let seg_seconds = settings.segment_seconds;
     let engine = std::thread::spawn(move || {
         let mut seg = Segmenter::new(seg_seconds);
@@ -74,10 +73,6 @@ pub fn start(bus: Arc<Bus>, paused: Arc<AtomicBool>, settings: Settings) -> Resu
                     Resampler::new(block.rate, 16000),
                 );
                 seg.reset();
-            }
-            if paused_e.load(Ordering::Relaxed) {
-                seg.reset();
-                continue;
             }
             let mono = mix_to_mono(&block.samples, block.channels);
             let filtered = if block.rate > 16000 {
@@ -147,12 +142,7 @@ pub fn start(bus: Arc<Bus>, paused: Arc<AtomicBool>, settings: Settings) -> Resu
         }
     });
 
-    let state_name = if paused.load(Ordering::Relaxed) {
-        "paused"
-    } else {
-        "listening"
-    };
-    bus.status(state_name, "");
+    bus.status("listening", "");
     Ok(Pipeline {
         stop,
         threads: vec![capture, engine, worker],

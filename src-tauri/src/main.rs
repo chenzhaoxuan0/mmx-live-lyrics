@@ -16,14 +16,12 @@ mod wav;
 
 use crate::bus::Bus;
 use crate::config::{Settings, WindowRect};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
 
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub bus: Arc<Bus>,
-    pub paused: Arc<AtomicBool>,
     pub pipeline: Mutex<Option<pipeline::Pipeline>>,
 }
 
@@ -38,7 +36,7 @@ fn main() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        let _ = toggle_pause(app.clone());
+                        let _ = toggle_run(app.clone());
                     }
                 })
                 .build(),
@@ -49,7 +47,7 @@ fn main() {
             cmd_list_devices,
             cmd_start,
             cmd_stop,
-            cmd_pause_toggle,
+            cmd_run_toggle,
             cmd_test_api,
             cmd_save_window,
             cmd_obs_url
@@ -101,7 +99,6 @@ fn main() {
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 bus,
-                paused: Arc::new(AtomicBool::new(false)),
                 pipeline: Mutex::new(None),
             });
 
@@ -120,20 +117,19 @@ fn main() {
         .expect("failed to run mmx-live-lyrics");
 }
 
-fn toggle_pause(app: AppHandle) -> Result<bool, String> {
+/// 唯一的运行开关：运行中 → 停止；空闲 → 开始
+fn toggle_run(app: AppHandle) -> Result<bool, String> {
     let state = app.state::<AppState>();
-    let now = !state.paused.load(Ordering::Relaxed);
-    state.paused.store(now, Ordering::Relaxed);
-    let running = state.pipeline.lock().unwrap().is_some();
-    state.bus.status(
-        match (running, now) {
-            (false, _) => "idle",
-            (true, true) => "paused",
-            (true, false) => "listening",
-        },
-        "",
-    );
-    Ok(now)
+    if state.pipeline.lock().unwrap().is_some() {
+        if let Some(p) = state.pipeline.lock().unwrap().take() {
+            p.stop();
+        }
+        state.bus.status("idle", "");
+        Ok(false)
+    } else {
+        restart_pipeline(&app)?;
+        Ok(true)
+    }
 }
 
 fn restart_pipeline(app: &AppHandle) -> Result<(), String> {
@@ -142,7 +138,7 @@ fn restart_pipeline(app: &AppHandle) -> Result<(), String> {
         p.stop();
     }
     let s = state.settings.lock().unwrap().clone();
-    match pipeline::start(state.bus.clone(), state.paused.clone(), s) {
+    match pipeline::start(state.bus.clone(), s) {
         Ok(p) => {
             *state.pipeline.lock().unwrap() = Some(p);
             Ok(())
@@ -167,7 +163,6 @@ fn cmd_get_settings(state: State<AppState>) -> Result<serde_json::Value, String>
     v["api_key_set"] = serde_json::json!(has_custom);
     v["mmx_key_found"] = serde_json::json!(api::resolve_key(None).is_ok());
     v["running"] = serde_json::json!(state.pipeline.lock().unwrap().is_some());
-    v["paused"] = serde_json::json!(state.paused.load(Ordering::Relaxed));
     Ok(v)
 }
 
@@ -232,8 +227,8 @@ fn cmd_stop(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn cmd_pause_toggle(app: AppHandle) -> Result<bool, String> {
-    toggle_pause(app)
+fn cmd_run_toggle(app: AppHandle) -> Result<bool, String> {
+    toggle_run(app)
 }
 
 #[tauri::command]
