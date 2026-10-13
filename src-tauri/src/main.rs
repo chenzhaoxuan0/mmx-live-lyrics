@@ -58,9 +58,9 @@ fn main() {
             let handle = app.handle().clone();
             let mut settings = config::load();
 
-            // CLI 覆盖：--start（自动开始识别）、--source mic|system
+            // CLI 覆盖：--start（自动开始识别）、--source mic|system；或配置里的 auto_start
             let args: Vec<String> = std::env::args().collect();
-            let autostart = args.iter().any(|a| a == "--start");
+            let autostart = args.iter().any(|a| a == "--start") || settings.auto_start;
             if let Some(src) = args
                 .iter()
                 .position(|a| a == "--source")
