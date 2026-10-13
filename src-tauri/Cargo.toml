@@ -1,6 +1,6 @@
 [package]
 name = "mmx-live-lyrics"
-version = "0.1.0"
+version = "0.2.0"
 description = "直播实时歌词字幕（mmx ASR）"
 edition = "2021"
 
