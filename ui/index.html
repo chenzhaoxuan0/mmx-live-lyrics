@@ -303,22 +303,30 @@
       <div class="tab-pages">
         <!-- ============ 声源与识别 ============ -->
         <div class="tab-page active" id="tab-rec">
+          <div class="section-title">声源（可同时识别）</div>
           <div class="row">
-            <label>声源</label>
-            <select id="sel-source">
-              <option value="mic">🎤 麦克风（推荐，省配额）</option>
-              <option value="system">🔊 系统声音（回录输出）</option>
+            <label>🎤 麦克风</label>
+            <select id="sel-mic-on">
+              <option value="1">识别开启</option>
+              <option value="0">关闭</option>
             </select>
           </div>
           <div class="row" id="row-input-device">
-            <label>麦克风</label>
+            <label>麦克风设备</label>
             <select id="sel-input-device"><option value="">（默认设备）</option></select>
           </div>
-          <div class="row" id="row-loopback-device" style="display:none">
+          <div class="row">
+            <label>🔊 电脑音频</label>
+            <select id="sel-sys-on">
+              <option value="1">识别开启</option>
+              <option value="0">关闭</option>
+            </select>
+          </div>
+          <div class="row" id="row-loopback-device">
             <label>输出设备</label>
             <select id="sel-loopback-device"><option value="">（默认设备）</option></select>
           </div>
-          <div class="hint">麦克风有自然停顿，断句准、配额省；系统声音在持续音乐下会持续消耗配额。</div>
+          <div class="hint">两者同时识别时字幕合并显示。麦克风适合人声（说话停顿断句、省配额）；电脑音频会捕捉游戏/音乐声，持续音乐下消耗配额更多。关闭任一声源立即生效。</div>
 
           <div class="row">
             <label>语言</label>
@@ -665,7 +673,8 @@
   /* ---------- 设置收集 / 自动保存 ---------- */
   function collectSettings() {
     var s = JSON.parse(JSON.stringify(state.settings || {}));
-    s.source = $('sel-source').value;
+    s.micEnabled = $('sel-mic-on').value === '1';
+    s.systemEnabled = $('sel-sys-on').value === '1';
     s.inputDevice = $('sel-input-device').value || null;
     s.loopbackDevice = $('sel-loopback-device').value || null;
     s.language = $('sel-language').value;
@@ -776,8 +785,8 @@
       state.settings = s;
       applyLook(s);
       state.running = !!s.running;
-      $('sel-source').value = s.source || 'mic';
-      $('sel-source').dispatchEvent(new Event('change'));
+      $('sel-mic-on').value = s.micEnabled === false ? '0' : '1';
+      $('sel-sys-on').value = s.systemEnabled === false ? '0' : '1';
       $('sel-language').value = s.language || 'zh';
       $('rg-segment').value = s.segmentSeconds || 2;
       $('segment-val').textContent = (s.segmentSeconds || 2).toFixed(1) + 's';
@@ -893,16 +902,12 @@
       });
     });
 
-    $('sel-source').addEventListener('change', function () {
-      var mic = $('sel-source').value === 'mic';
-      $('row-input-device').style.display = mic ? '' : 'none';
-      $('row-loopback-device').style.display = mic ? 'none' : '';
-    });
-
+    $('sel-mic-on').addEventListener('change', saveSoon);
+    $('sel-sys-on').addEventListener('change', saveSoon);
     $('rg-segment').addEventListener('input', function () {
       $('segment-val').textContent = parseFloat(this.value).toFixed(1) + 's';
     });
-    ['sel-source', 'sel-input-device', 'sel-loopback-device', 'sel-language', 'rg-segment', 'ck-obs', 'in-hotkey', 'sel-autostart']
+    ['sel-input-device', 'sel-loopback-device', 'sel-language', 'rg-segment', 'ck-obs', 'in-hotkey', 'sel-autostart']
       .forEach(function (id) { $(id).addEventListener('change', saveSoon); });
     $('in-apikey').addEventListener('change', saveSoon);
 

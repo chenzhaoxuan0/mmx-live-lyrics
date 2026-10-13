@@ -51,8 +51,9 @@ pub struct LookPreset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// 声源："mic"（麦克风）| "system"（系统声音回录）
-    pub source: String,
+    /// 双声源独立开关：默认两者同时识别
+    pub mic_enabled: bool,
+    pub system_enabled: bool,
     pub input_device: Option<String>,
     pub loopback_device: Option<String>,
     /// BCP-47 语言提示，空串 = 自动检测
@@ -93,7 +94,6 @@ pub struct Settings {
     pub hotkey: String,
     pub window: Option<WindowRect>,
 }
-
 fn d_font_size() -> f32 { 72.0 }
 fn d_font_weight() -> u32 { 900 }
 fn d_color1() -> String { "#67e8f9".into() }
@@ -110,7 +110,8 @@ fn d_hist_opacity() -> f32 { 0.45 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            source: "mic".into(),
+            mic_enabled: true,
+            system_enabled: true,
             input_device: None,
             loopback_device: None,
             language: "zh".into(),
@@ -136,7 +137,7 @@ impl Default for Settings {
             hist_color: d_hist_color(),
             hist_opacity: d_hist_opacity(),
             presets: Vec::new(),
-            auto_start: false,
+            auto_start: true,
             hotkey: "Ctrl+Alt+L".into(),
             window: None,
         }
@@ -157,10 +158,21 @@ pub fn config_path() -> PathBuf {
 }
 
 pub fn load() -> Settings {
-    std::fs::read_to_string(config_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let raw = std::fs::read_to_string(config_path()).ok();
+    let mut s: Settings = raw
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    // 旧格式（单 source 字段）迁移：默认改为"双开 + 自动识别"，并立即回写新格式
+    if let Some(raw) = &raw {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+            if v.get("mic_enabled").is_none() {
+                s.auto_start = true;
+                let _ = save(&s);
+            }
+        }
+    }
+    s
 }
 
 pub fn save(s: &Settings) -> Result<(), String> {

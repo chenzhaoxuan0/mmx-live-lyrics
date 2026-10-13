@@ -22,7 +22,10 @@ use tauri::{AppHandle, Manager, State};
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub bus: Arc<Bus>,
-    pub pipeline: Mutex<Option<pipeline::Pipeline>>,
+    /// 状态聚合器（双声源合成一个状态灯）
+    pub agg: Arc<bus::StatusReport>,
+    /// [KIND_MIC, KIND_SYSTEM] 两条独立管线
+    pub pipelines: Mutex<[Option<pipeline::Pipeline>; 2]>,
 }
 
 fn main() {
@@ -56,7 +59,7 @@ fn main() {
             let handle = app.handle().clone();
             let mut settings = config::load();
 
-            // CLI 覆盖：--start（自动开始识别）、--source mic|system；或配置里的 auto_start
+            // CLI 覆盖：--start（自动开始识别）、--source mic|system|both；或配置里的 auto_start
             let args: Vec<String> = std::env::args().collect();
             let autostart = args.iter().any(|a| a == "--start") || settings.auto_start;
             if let Some(src) = args
@@ -64,8 +67,20 @@ fn main() {
                 .position(|a| a == "--source")
                 .and_then(|i| args.get(i + 1))
             {
-                if src == "mic" || src == "system" {
-                    settings.source = src.clone();
+                match src.as_str() {
+                    "mic" => {
+                        settings.mic_enabled = true;
+                        settings.system_enabled = false;
+                    }
+                    "system" => {
+                        settings.mic_enabled = false;
+                        settings.system_enabled = true;
+                    }
+                    "both" => {
+                        settings.mic_enabled = true;
+                        settings.system_enabled = true;
+                    }
+                    _ => {}
                 }
             }
 
@@ -96,17 +111,19 @@ fn main() {
             bus.settings_snapshot(&settings);
             bus.status("idle", "");
 
+            let agg = bus::StatusReport::new(bus.clone());
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 bus,
-                pipeline: Mutex::new(None),
+                agg,
+                pipelines: Mutex::new([None, None]),
             });
 
             if autostart {
                 let h = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(400));
-                    if let Err(e) = restart_pipeline(&h) {
+                    if let Err(e) = start_enabled(&h) {
                         eprintln!("autostart failed: {e}");
                     }
                 });
@@ -117,52 +134,134 @@ fn main() {
         .expect("failed to run mmx-live-lyrics");
 }
 
-/// 唯一的运行开关：运行中 → 停止；空闲（或已因致命错误停摆）→ 开始。立即返回，绝不阻塞。
+/// 唯一的运行开关：运行中 → 停止全部；空闲（或已因致命错误停摆）→ 启动所有已启用声源。立即返回，绝不阻塞。
 fn toggle_run(app: AppHandle) -> Result<bool, String> {
-    let state = app.state::<AppState>();
-    let running = state
-        .pipeline
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|p| p.is_active())
-        .unwrap_or(false);
-    if running {
-        if let Some(p) = state.pipeline.lock().unwrap().take() {
-            p.stop();
-        }
-        state.bus.status("idle", "");
+    if is_running(&app.state::<AppState>()) {
+        stop_all(&app);
         Ok(false)
     } else {
-        restart_pipeline(&app)?;
+        start_enabled(&app)?;
         Ok(true)
     }
 }
 
 fn is_running(state: &AppState) -> bool {
     state
-        .pipeline
+        .pipelines
         .lock()
         .unwrap()
-        .as_ref()
-        .map(|p| p.is_active())
-        .unwrap_or(false)
+        .iter()
+        .any(|p| p.as_ref().map(|x| x.is_active()).unwrap_or(false))
 }
 
-fn restart_pipeline(app: &AppHandle) -> Result<(), String> {
+/// 启动单条声源管线（kind：bus::KIND_MIC / bus::KIND_SYSTEM）
+fn start_kind(app: &AppHandle, kind: usize) -> Result<(), String> {
     let state = app.state::<AppState>();
-    if let Some(p) = state.pipeline.lock().unwrap().take() {
-        p.stop();
-    }
     let s = state.settings.lock().unwrap().clone();
-    match pipeline::start(state.bus.clone(), s) {
+    match pipeline::start(state.bus.clone(), state.agg.clone(), kind, s) {
         Ok(p) => {
-            *state.pipeline.lock().unwrap() = Some(p);
+            state.pipelines.lock().unwrap()[kind] = Some(p);
             Ok(())
         }
-        Err(e) => {
-            state.bus.status("error", &e);
-            Err(e)
+        Err(e) => Err(e),
+    }
+}
+
+fn stop_kind(app: &AppHandle, kind: usize) {
+    let state = app.state::<AppState>();
+    if let Some(p) = state.pipelines.lock().unwrap()[kind].take() {
+        p.stop();
+    }
+    state.agg.clear(kind);
+}
+
+/// 启动所有已启用的声源（至少要有一个，否则视为无效操作）
+fn start_enabled(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let s = state.settings.lock().unwrap().clone();
+    if !s.mic_enabled && !s.system_enabled {
+        state.bus.status("idle", "未启用任何声源，请在设置中开启");
+        return Ok(());
+    }
+    let mut first_err = None;
+    if s.mic_enabled {
+        if let Err(e) = start_kind(app, bus::KIND_MIC) {
+            state
+                .agg
+                .report(bus::KIND_MIC, "error", &e);
+            first_err = Some(e);
+        }
+    }
+    if s.system_enabled {
+        if let Err(e) = start_kind(app, bus::KIND_SYSTEM) {
+            state
+                .agg
+                .report(bus::KIND_SYSTEM, "error", &e);
+            if first_err.is_none() {
+                first_err = Some(e);
+            }
+        }
+    }
+    match first_err {
+        // 两路全败才算启动失败（此时聚合状态已是 error）
+        Some(e) if !is_running(&app.state::<AppState>()) => Err(e),
+        _ => Ok(()),
+    }
+}
+
+fn stop_all(app: &AppHandle) {
+    stop_kind(app, bus::KIND_MIC);
+    stop_kind(app, bus::KIND_SYSTEM);
+}
+
+/// 设置变化后的按源协调：停掉被关闭/设备变更的源，补启新开启的源（仅在整体运行中）
+fn reconcile(app: &AppHandle, old: &Settings, new: &Settings) {
+    let was_running = is_running(&app.state::<AppState>());
+    if !was_running {
+        return;
+    }
+    let shared_changed = old.language != new.language
+        || old.segment_seconds != new.segment_seconds
+        || old.base_url != new.base_url
+        || old.api_key != new.api_key;
+    // 先停：被关闭的源 / 设备或共享参数变化的源
+    for (kind, (_was_on, now_on), dev_changed) in [
+        (
+            bus::KIND_MIC,
+            (old.mic_enabled, new.mic_enabled),
+            old.input_device != new.input_device,
+        ),
+        (
+            bus::KIND_SYSTEM,
+            (old.system_enabled, new.system_enabled),
+            old.loopback_device != new.loopback_device,
+        ),
+    ] {
+        let active = app
+            .state::<AppState>()
+            .pipelines
+            .lock()
+            .unwrap()[kind]
+            .as_ref()
+            .map(|p| p.is_active())
+            .unwrap_or(false);
+        if active && (!now_on || dev_changed || shared_changed) {
+            stop_kind(app, kind);
+        }
+    }
+    // 后启：仍在/新启用但未运行的源
+    let s = app.state::<AppState>().settings.lock().unwrap().clone();
+    for (kind, on) in [(bus::KIND_MIC, s.mic_enabled), (bus::KIND_SYSTEM, s.system_enabled)] {
+        let active = app
+            .state::<AppState>()
+            .pipelines
+            .lock()
+            .unwrap()[kind]
+            .as_ref()
+            .map(|p| p.is_active())
+            .unwrap_or(false);
+        if on && !active {
+            let _ = start_kind(app, kind);
         }
     }
 }
@@ -189,7 +288,7 @@ fn cmd_set_settings(
     app: AppHandle,
     settings: Settings,
 ) -> Result<(), String> {
-    let restart_needed = {
+    let old = {
         let mut guard = state.settings.lock().unwrap();
         let old = guard.clone();
         // 前端用 "__keep__" 表示未改动自定义 Key：保持旧值不下发明文
@@ -202,17 +301,9 @@ fn cmd_set_settings(
         *guard = incoming.clone();
         config::save(&incoming)?;
         state.bus.settings_snapshot(&incoming);
-        old.source != incoming.source
-            || old.input_device != incoming.input_device
-            || old.loopback_device != incoming.loopback_device
-            || old.segment_seconds != incoming.segment_seconds
-            || old.language != incoming.language
-            || old.base_url != incoming.base_url
-            || old.api_key != incoming.api_key
+        old
     };
-    if restart_needed && is_running(&state) {
-        restart_pipeline(&app)?;
-    }
+    reconcile(&app, &old, &app.state::<AppState>().settings.lock().unwrap().clone());
     Ok(())
 }
 
@@ -226,20 +317,15 @@ fn cmd_list_devices() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn cmd_start(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    if is_running(&state) {
+    if is_running(&app.state::<AppState>()) {
         return Ok(());
     }
-    restart_pipeline(&app)
+    start_enabled(&app)
 }
 
 #[tauri::command]
 fn cmd_stop(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    if let Some(p) = state.pipeline.lock().unwrap().take() {
-        p.stop();
-    }
-    state.bus.status("idle", "");
+    stop_all(&app);
     Ok(())
 }
 

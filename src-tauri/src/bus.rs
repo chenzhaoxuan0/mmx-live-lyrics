@@ -84,3 +84,66 @@ impl Bus {
         }
     }
 }
+
+/// 双声源状态聚合：麦克风/系统各占一个槽位，合成一个对外状态。
+/// 规则：任一源健康 → listening/sending/retry（附错误详情）；全部停摆且有错误 → error；
+/// 槽位全空 → idle。这样"error"只会出现在彻底停止时，前端按钮语义不会混乱。
+pub struct StatusReport {
+    bus: Arc<Bus>,
+    slots: Mutex<[Option<(String, String)>; 2]>, // (state, detail)
+}
+
+pub const KIND_MIC: usize = 0;
+pub const KIND_SYSTEM: usize = 1;
+
+impl StatusReport {
+    pub fn new(bus: Arc<Bus>) -> Arc<Self> {
+        Arc::new(Self {
+            bus,
+            slots: Mutex::new([None, None]),
+        })
+    }
+
+    pub fn report(&self, kind: usize, state: &str, detail: &str) {
+        self.slots.lock().unwrap()[kind.min(1)] = Some((state.to_string(), detail.to_string()));
+        self.recompute();
+    }
+
+    /// 某声源停止后清除其槽位并重算
+    pub fn clear(&self, kind: usize) {
+        self.slots.lock().unwrap()[kind.min(1)] = None;
+        self.recompute();
+    }
+
+    fn recompute(&self) {
+        let slots = self.slots.lock().unwrap();
+        let flat: Vec<&(String, String)> = slots.iter().flatten().collect();
+        let (agg, detail) = if flat.is_empty() {
+            ("idle".to_string(), String::new())
+        } else {
+            let healthy = flat.iter().filter(|(st, _)| st != "error" && st != "idle").count();
+            let err = flat.iter().find(|(st, _)| st == "error");
+            if healthy == 0 && err.is_some() {
+                (err.unwrap().0.clone(), err.unwrap().1.clone())
+            } else {
+                let has_retry = flat.iter().any(|(st, _)| st == "retry");
+                let has_send = flat.iter().any(|(st, _)| st == "sending");
+                let state = if has_retry {
+                    "retry"
+                } else if has_send {
+                    "sending"
+                } else {
+                    "listening"
+                };
+                // 一路出错但另一路还在跑：状态保持运行，附上错误详情
+                let d = err
+                    .or_else(|| flat.iter().find(|(st, _)| st == "retry"))
+                    .map(|(_, d)| d.clone())
+                    .unwrap_or_default();
+                (state.to_string(), d)
+            }
+        };
+        drop(slots);
+        self.bus.status(&agg, &detail);
+    }
+}

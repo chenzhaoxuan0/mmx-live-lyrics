@@ -3,7 +3,7 @@
 //! 线程模型与 sub-title 一致：单向通道解耦，停止用 AtomicBool 哨兵。
 //! 暂停期间采集不停（秒级恢复），引擎线程丢弃音频。
 use crate::api::{resolve_key, MmxAsr};
-use crate::bus::Bus;
+use crate::bus::{Bus, StatusReport, KIND_SYSTEM};
 use crate::capture::{capture_loop, AudioBlock};
 use crate::config::Settings;
 use crate::dsp::{mix_to_mono, LowPass, Resampler};
@@ -41,7 +41,14 @@ fn strip_tail_punct(s: &str) -> &str {
     s.trim_end_matches(TAIL)
 }
 
-pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
+/// 启动一条单源管线。kind：KIND_MIC（麦克风）/ KIND_SYSTEM（系统声音回录）。
+/// 双声源 = 调用方各启动一条，互不干扰。
+pub fn start(
+    bus: Arc<Bus>,
+    report: Arc<StatusReport>,
+    kind: usize,
+    settings: Settings,
+) -> Result<Pipeline, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let active = Arc::new(AtomicBool::new(true));
     let (btx, brx) = mpsc::channel::<AudioBlock>();
@@ -50,18 +57,18 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
     // 1) 采集线程（设备失败 = 致命：停整条管线）
     let stop_c = stop.clone();
     let active_c = active.clone();
-    let source = settings.source.clone();
-    let device = if source == "system" {
+    let source = if kind == KIND_SYSTEM { "system" } else { "mic" }.to_string();
+    let device = if kind == KIND_SYSTEM {
         settings.loopback_device.clone()
     } else {
         settings.input_device.clone()
     };
-    let bus_c = bus.clone();
+    let report_c = report.clone();
     let capture = std::thread::spawn(move || {
         if let Err(e) = capture_loop(&source, device.as_deref(), btx, stop_c.clone()) {
             active_c.store(false, Ordering::Relaxed);
             stop_c.store(true, Ordering::Relaxed);
-            bus_c.status("error", &e);
+            report_c.report(kind, "error", &e);
         }
     });
 
@@ -124,6 +131,7 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
     let stop_w = stop.clone();
     let active_w = active.clone();
     let bus_w = bus.clone();
+    let report_w = report.clone();
     let worker = std::thread::spawn(move || {
         let mut auth_dead = false;
         for seg_pcm in srx {
@@ -133,14 +141,14 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
             if auth_dead || seg_pcm.is_empty() {
                 continue;
             }
-            bus_w.status("sending", "");
+            report_w.report(kind, "sending", "");
             let mut attempt = 0u32;
             loop {
                 match client.transcribe(&seg_pcm, &language) {
                     Ok(text) => {
                         // 停止后到达的迟到结果不再推送
                         if !stop_w.load(Ordering::Relaxed) {
-                            bus_w.status("ok", "");
+                            report_w.report(kind, "ok", "");
                             if !text.is_empty() {
                                 bus_w.text(strip_tail_punct(&text));
                             }
@@ -150,7 +158,7 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
                     Err(e) if e.is_auth() => {
                         active_w.store(false, Ordering::Relaxed);
                         stop_w.store(true, Ordering::Relaxed);
-                        bus_w.status("error", &e.message());
+                        report_w.report(kind, "error", &e.message());
                         auth_dead = true;
                         break;
                     }
@@ -159,10 +167,14 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
                         if attempt >= 3 || stop_w.load(Ordering::Relaxed) {
                             active_w.store(false, Ordering::Relaxed);
                             stop_w.store(true, Ordering::Relaxed);
-                            bus_w.status("error", &e.message());
+                            report_w.report(kind, "error", &e.message());
                             break;
                         }
-                        bus_w.status("retry", &format!("重试 {attempt}/2：{}", e.message()));
+                        report_w.report(
+                            kind,
+                            "retry",
+                            &format!("重试 {attempt}/2：{}", e.message()),
+                        );
                         std::thread::sleep(Duration::from_millis(400 * attempt as u64));
                     }
                 }
@@ -170,7 +182,7 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
         }
     });
 
-    bus.status("listening", "");
+    report.report(kind, "listening", "");
     // JoinHandle 一经 drop 线程即脱离（detached，不阻塞）；停止只靠 stop 标志广播
     drop(capture);
     drop(engine);
