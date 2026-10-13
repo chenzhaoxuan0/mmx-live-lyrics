@@ -14,25 +14,42 @@ use std::time::Duration;
 
 pub struct Pipeline {
     stop: Arc<AtomicBool>,
-    threads: Vec<std::thread::JoinHandle<()>>,
+    /// 是否仍在有效运行：致命错误（设备/鉴权/连续网络失败）会置 false，此时管线虽有线程残留但已停摆
+    active: Arc<AtomicBool>,
 }
 
 impl Pipeline {
-    pub fn stop(mut self) {
+    /// 立即返回，不 join 任何线程：
+    ///   - 采集/引擎线程在 ≤100ms 内感知标志位自行退出（音频即刻停）
+    ///   - 工作线程可能在途一次 HTTP（最长 20s），会在后台自然收尾且不再推送文本
+    /// join 版本会把主线程阻塞在 HTTP 超时上，是"停止不跟手"的根因，绝不能恢复。
+    pub fn stop(self) {
         self.stop.store(true, Ordering::Relaxed);
-        for t in self.threads.drain(..) {
-            let _ = t.join();
-        }
+        self.active.store(false, Ordering::Relaxed);
     }
+
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
+    }
+}
+
+/// 剥掉句尾句读（。！？…等）：历史字幕按文本流排列，句号会打断阅读
+fn strip_tail_punct(s: &str) -> &str {
+    const TAIL: &[char] = &[
+        '。', '．', '｡', '！', '!', '？', '?', '…', '‥', '.', '"', '”', '\'', '’', ' ', '　',
+    ];
+    s.trim_end_matches(TAIL)
 }
 
 pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
     let stop = Arc::new(AtomicBool::new(false));
+    let active = Arc::new(AtomicBool::new(true));
     let (btx, brx) = mpsc::channel::<AudioBlock>();
     let (stx, srx) = mpsc::channel::<Vec<f32>>();
 
-    // 1) 采集线程
+    // 1) 采集线程（设备失败 = 致命：停整条管线）
     let stop_c = stop.clone();
+    let active_c = active.clone();
     let source = settings.source.clone();
     let device = if source == "system" {
         settings.loopback_device.clone()
@@ -41,7 +58,9 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
     };
     let bus_c = bus.clone();
     let capture = std::thread::spawn(move || {
-        if let Err(e) = capture_loop(&source, device.as_deref(), btx, stop_c) {
+        if let Err(e) = capture_loop(&source, device.as_deref(), btx, stop_c.clone()) {
+            active_c.store(false, Ordering::Relaxed);
+            stop_c.store(true, Ordering::Relaxed);
             bus_c.status("error", &e);
         }
     });
@@ -93,7 +112,8 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
         }
     });
 
-    // 3) 工作线程：上传 + 推送（认证错误不重试，网络/服务端错误重试 2 次）
+    // 3) 工作线程：上传 + 推送（鉴权错误不重试；网络/服务端错误重试 2 次；
+    //    鉴权失败 / 连续失败 = 致命：停整条管线，避免按钮陷入"假运行"）
     let key = resolve_key(settings.api_key.as_deref())?;
     let client = MmxAsr::new(&settings.base_url, key);
     let language = if settings.language == "auto" {
@@ -102,6 +122,7 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
         settings.language.clone()
     };
     let stop_w = stop.clone();
+    let active_w = active.clone();
     let bus_w = bus.clone();
     let worker = std::thread::spawn(move || {
         let mut auth_dead = false;
@@ -117,20 +138,27 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
             loop {
                 match client.transcribe(&seg_pcm, &language) {
                     Ok(text) => {
-                        bus_w.status("ok", "");
-                        if !text.is_empty() {
-                            bus_w.text(&text);
+                        // 停止后到达的迟到结果不再推送
+                        if !stop_w.load(Ordering::Relaxed) {
+                            bus_w.status("ok", "");
+                            if !text.is_empty() {
+                                bus_w.text(strip_tail_punct(&text));
+                            }
                         }
                         break;
                     }
                     Err(e) if e.is_auth() => {
+                        active_w.store(false, Ordering::Relaxed);
+                        stop_w.store(true, Ordering::Relaxed);
                         bus_w.status("error", &e.message());
                         auth_dead = true;
                         break;
                     }
                     Err(e) => {
                         attempt += 1;
-                        if attempt >= 3 {
+                        if attempt >= 3 || stop_w.load(Ordering::Relaxed) {
+                            active_w.store(false, Ordering::Relaxed);
+                            stop_w.store(true, Ordering::Relaxed);
                             bus_w.status("error", &e.message());
                             break;
                         }
@@ -143,8 +171,9 @@ pub fn start(bus: Arc<Bus>, settings: Settings) -> Result<Pipeline, String> {
     });
 
     bus.status("listening", "");
-    Ok(Pipeline {
-        stop,
-        threads: vec![capture, engine, worker],
-    })
+    // JoinHandle 一经 drop 线程即脱离（detached，不阻塞）；停止只靠 stop 标志广播
+    drop(capture);
+    drop(engine);
+    drop(worker);
+    Ok(Pipeline { stop, active })
 }

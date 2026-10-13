@@ -117,10 +117,17 @@ fn main() {
         .expect("failed to run mmx-live-lyrics");
 }
 
-/// 唯一的运行开关：运行中 → 停止；空闲 → 开始
+/// 唯一的运行开关：运行中 → 停止；空闲（或已因致命错误停摆）→ 开始。立即返回，绝不阻塞。
 fn toggle_run(app: AppHandle) -> Result<bool, String> {
     let state = app.state::<AppState>();
-    if state.pipeline.lock().unwrap().is_some() {
+    let running = state
+        .pipeline
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|p| p.is_active())
+        .unwrap_or(false);
+    if running {
         if let Some(p) = state.pipeline.lock().unwrap().take() {
             p.stop();
         }
@@ -130,6 +137,16 @@ fn toggle_run(app: AppHandle) -> Result<bool, String> {
         restart_pipeline(&app)?;
         Ok(true)
     }
+}
+
+fn is_running(state: &AppState) -> bool {
+    state
+        .pipeline
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|p| p.is_active())
+        .unwrap_or(false)
 }
 
 fn restart_pipeline(app: &AppHandle) -> Result<(), String> {
@@ -162,7 +179,7 @@ fn cmd_get_settings(state: State<AppState>) -> Result<serde_json::Value, String>
     v["api_key"] = serde_json::json!("");
     v["api_key_set"] = serde_json::json!(has_custom);
     v["mmx_key_found"] = serde_json::json!(api::resolve_key(None).is_ok());
-    v["running"] = serde_json::json!(state.pipeline.lock().unwrap().is_some());
+    v["running"] = serde_json::json!(is_running(&state));
     Ok(v)
 }
 
@@ -193,7 +210,7 @@ fn cmd_set_settings(
             || old.base_url != incoming.base_url
             || old.api_key != incoming.api_key
     };
-    if restart_needed && state.pipeline.lock().unwrap().is_some() {
+    if restart_needed && is_running(&state) {
         restart_pipeline(&app)?;
     }
     Ok(())
@@ -210,7 +227,7 @@ fn cmd_list_devices() -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn cmd_start(app: AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    if state.pipeline.lock().unwrap().is_some() {
+    if is_running(&state) {
         return Ok(());
     }
     restart_pipeline(&app)

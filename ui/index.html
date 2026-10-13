@@ -644,8 +644,8 @@
     $('dot').style.boxShadow = '0 0 8px ' + meta.color;
     $('dot').classList.toggle('busy', meta.busy);
     $('status-text').textContent = p.detail ? meta.label + ' · ' + p.detail : meta.label;
-    if (p.state === 'listening') state.running = true;
-    if (p.state === 'idle') state.running = false;
+    if (p.state === 'idle' || p.state === 'error') state.running = false;
+    else state.running = true; // listening / sending / retry / ok
     syncRunButtons();
   }
 
@@ -870,12 +870,16 @@
 
   /* ---------- 公共交互 ---------- */
   function toggleRun() {
-    invoke('cmd_set_settings', { settings: collectSettings() }).then(function () {
-      return invoke(state.running ? 'cmd_stop' : 'cmd_start');
-    }).then(function () {
-      state.running = !state.running;
-      syncRunButtons();
-    }).catch(showErr);
+    var wantRun = !state.running;
+    state.running = wantRun; // 乐观更新，随后的状态事件 / 返回值会校正
+    syncRunButtons();
+    var p = wantRun
+      ? invoke('cmd_set_settings', { settings: collectSettings() })
+          .then(function () { return invoke('cmd_run_toggle'); })
+      : invoke('cmd_run_toggle'); // 停止直接执行，不经过保存，避免多余延迟
+    p.then(function (actual) {
+      if (typeof actual === 'boolean') { state.running = actual; syncRunButtons(); }
+    }).catch(function (e) { showErr(e); });
   }
 
   function bindCommon() {
