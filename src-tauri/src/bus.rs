@@ -1,8 +1,16 @@
 //! 消息总线：同一条消息同时推给 Tauri 前端（事件）和 OBS 浏览器源（WebSocket）。
 use crate::config::Settings;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{AppHandle, Emitter};
+
+/// 取锁：锁被毒化时也要能继续用（避免一次 panic 之后所有命令都 panic 的连锁闪退）
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    }
+}
 
 pub struct Bus {
     app: AppHandle,
@@ -25,14 +33,14 @@ impl Bus {
     }
 
     pub fn add_client(&self, tx: std::sync::mpsc::Sender<String>) {
-        if let Some(s) = self.last_snapshot.lock().unwrap().clone() {
+        if let Some(s) = lock(&self.last_snapshot).clone() {
             let _ = tx.send(s);
         }
-        let st = self.last_status.lock().unwrap().clone();
+        let st = lock(&self.last_status).clone();
         if !st.is_empty() {
             let _ = tx.send(st);
         }
-        self.ws_clients.lock().unwrap().push(tx);
+        lock(&self.ws_clients).push(tx);
     }
 
     pub fn text(&self, t: &str) {
@@ -46,12 +54,13 @@ impl Bus {
     pub fn status(&self, state: &str, detail: &str) {
         let payload = serde_json::json!({ "type": "status", "state": state, "detail": detail });
         let json = payload.to_string();
-        *self.last_status.lock().unwrap() = json.clone();
+        *lock(&self.last_status) = json.clone();
         let _ = self.app.emit("asr://status", &payload);
         self.broadcast(&json);
     }
 
     /// 外观设置快照（OBS 页面没有 Tauri API，靠这条同步全部外观）
+    /// 键名与前端 LOOK_FIELDS 一致（camelCase）
     pub fn settings_snapshot(&self, s: &Settings) {
         let payload = serde_json::json!({
             "type": "settings",
@@ -73,15 +82,14 @@ impl Bus {
             "histOpacity": s.hist_opacity,
         });
         let json = payload.to_string();
-        *self.last_snapshot.lock().unwrap() = Some(json.clone());
+        *lock(&self.last_snapshot) = Some(json.clone());
         let _ = self.app.emit("asr://settings", &payload);
         self.broadcast(&json);
     }
 
     fn broadcast(&self, json: &str) {
-        if let Ok(mut v) = self.ws_clients.lock() {
-            v.retain(|c| c.send(json.to_string()).is_ok());
-        }
+        let mut v = lock(&self.ws_clients);
+        v.retain(|c| c.send(json.to_string()).is_ok());
     }
 }
 
@@ -105,18 +113,18 @@ impl StatusReport {
     }
 
     pub fn report(&self, kind: usize, state: &str, detail: &str) {
-        self.slots.lock().unwrap()[kind.min(1)] = Some((state.to_string(), detail.to_string()));
+        lock(&self.slots)[kind.min(1)] = Some((state.to_string(), detail.to_string()));
         self.recompute();
     }
 
     /// 某声源停止后清除其槽位并重算
     pub fn clear(&self, kind: usize) {
-        self.slots.lock().unwrap()[kind.min(1)] = None;
+        lock(&self.slots)[kind.min(1)] = None;
         self.recompute();
     }
 
     fn recompute(&self) {
-        let slots = self.slots.lock().unwrap();
+        let slots = lock(&self.slots);
         let flat: Vec<&(String, String)> = slots.iter().flatten().collect();
         let (agg, detail) = if flat.is_empty() {
             ("idle".to_string(), String::new())

@@ -2,7 +2,7 @@
 //!
 //! 线程模型与 sub-title 一致：单向通道解耦，停止用 AtomicBool 哨兵。
 //! 暂停期间采集不停（秒级恢复），引擎线程丢弃音频。
-use crate::api::{resolve_key, MmxAsr};
+use crate::api::AsrClient;
 use crate::bus::{Bus, StatusReport, KIND_SYSTEM};
 use crate::capture::{capture_loop, AudioBlock};
 use crate::config::Settings;
@@ -16,21 +16,42 @@ pub struct Pipeline {
     stop: Arc<AtomicBool>,
     /// 是否仍在有效运行：致命错误（设备/鉴权/连续网络失败）会置 false，此时管线虽有线程残留但已停摆
     active: Arc<AtomicBool>,
+    /// 采集线程句柄：停止时 join它，确保音频设备真正释放（否则"停完立刻再开"会撞上设备占用）
+    capture: Option<std::thread::JoinHandle<()>>,
+    /// 引擎线程句柄：采集线程结束后它自然退出（通道关闭），一并 join 保持整洁
+    engine: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Pipeline {
-    /// 立即返回，不 join 任何线程：
-    ///   - 采集/引擎线程在 ≤100ms 内感知标志位自行退出（音频即刻停）
-    ///   - 工作线程可能在途一次 HTTP（最长 20s），会在后台自然收尾且不再推送文本
-    /// join 版本会把主线程阻塞在 HTTP 超时上，是"停止不跟手"的根因，绝不能恢复。
-    pub fn stop(self) {
+    /// 停止：置标志位后，**等待采集线程真正退出**（≤几百 ms），让设备立即可用。
+    ///
+    /// 只 join 采集/引擎线程——它们不做网络 I/O，退出有确定上界。
+    /// 工作线程可能在途一次 HTTP（最长 20s），保持 detached，绝不 join，
+    /// 否则会把主线程阻塞在 HTTP 超时上（"停止不跟手"的根因）。
+    pub fn stop(mut self) {
         self.stop.store(true, Ordering::Relaxed);
         self.active.store(false, Ordering::Relaxed);
+        if let Some(h) = self.capture.take() {
+            join_bounded(h, Duration::from_millis(2000));
+        }
+        if let Some(h) = self.engine.take() {
+            join_bounded(h, Duration::from_millis(2000));
+        }
     }
 
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::Relaxed)
     }
+}
+
+/// 带超时的 join：超时后放弃等待（线程仍在后台自行结束），绝不无限期阻塞调用方
+fn join_bounded(h: std::thread::JoinHandle<()>, timeout: Duration) {
+    let (tx, rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let _ = h.join();
+        let _ = tx.send(());
+    });
+    let _ = rx.recv_timeout(timeout);
 }
 
 /// 剥掉句尾句读（。！？…等）：历史字幕按文本流排列，句号会打断阅读
@@ -49,6 +70,11 @@ pub fn start(
     kind: usize,
     settings: Settings,
 ) -> Result<Pipeline, String> {
+    // 关键：先做所有可能失败的准备工作（Key / 客户端），失败就直接返回错误，
+    // 绝不在"已经 spawn 了线程"之后才失败——否则采集线程会变成僵尸，
+    // 一直占着麦克风设备，导致下一次启动失败（"一次性"体验）。
+    let client = AsrClient::from_settings(&settings)?;
+
     let stop = Arc::new(AtomicBool::new(false));
     let active = Arc::new(AtomicBool::new(true));
     let (btx, brx) = mpsc::channel::<AudioBlock>();
@@ -65,10 +91,17 @@ pub fn start(
     };
     let report_c = report.clone();
     let capture = std::thread::spawn(move || {
-        if let Err(e) = capture_loop(&source, device.as_deref(), btx, stop_c.clone()) {
-            active_c.store(false, Ordering::Relaxed);
-            stop_c.store(true, Ordering::Relaxed);
-            report_c.report(kind, "error", &e);
+        // 采集线程里的 panic（如 cpal 内部线程异常）不能被静默吞掉：
+        // 否则管线会永远显示"在跑"却没有任何音频（假运行）。
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            capture_loop(&source, device.as_deref(), btx, stop_c.clone())
+        }));
+        active_c.store(false, Ordering::Relaxed);
+        stop_c.store(true, Ordering::Relaxed);
+        match outcome {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => report_c.report(kind, "error", &e),
+            Err(_) => report_c.report(kind, "error", "音频采集线程异常退出（设备可能被独占或已拔出）"),
         }
     });
 
@@ -121,8 +154,6 @@ pub fn start(
 
     // 3) 工作线程：上传 + 推送（鉴权错误不重试；网络/服务端错误重试 2 次；
     //    鉴权失败 / 连续失败 = 致命：停整条管线，避免按钮陷入"假运行"）
-    let key = resolve_key(settings.api_key.as_deref())?;
-    let client = MmxAsr::new(&settings.base_url, key);
     let language = if settings.language == "auto" {
         String::new()
     } else {
@@ -183,9 +214,12 @@ pub fn start(
     });
 
     report.report(kind, "listening", "");
-    // JoinHandle 一经 drop 线程即脱离（detached，不阻塞）；停止只靠 stop 标志广播
-    drop(capture);
-    drop(engine);
+    // 工作线程保持 detached（可能在途 HTTP，不能 join）；采集/引擎线程交给 Pipeline.stop
     drop(worker);
-    Ok(Pipeline { stop, active })
+    Ok(Pipeline {
+        stop,
+        active,
+        capture: Some(capture),
+        engine: Some(engine),
+    })
 }
