@@ -1,6 +1,6 @@
 # mmx-live-lyrics · 直播实时歌词字幕
 
-给主播的实时语音转字幕工具：把麦克风（或系统声音）转成**音乐软件歌词式的大字**，悬浮在桌面上或直接进 OBS。纯 API 识别（MiniMax `asr-1.0`，即 `mmx speech transcribe` 背后的服务），无本地模型、无 Python 运行时。
+给主播的实时语音转字幕工具：把麦克风（或系统声音）转成**音乐软件歌词式的大字**，悬浮在桌面上或直接进 OBS。纯 API 识别，**ASR 服务商可插拔**（MiniMax / OpenAI 兼容 / 通用自定义接口），无本地模型、无 Python 运行时。
 
 从 [sub-title](https://github.com/) 项目精简而来：砍掉全部本地引擎、翻译、皮肤、说话人，只保留"采集 → 断句 → API → 歌词窗口"这一条链路。
 
@@ -17,6 +17,7 @@
 - **双声源**：麦克风（推荐，省配额）或系统声音（WASAPI loopback 回录输出）
 - **省配额设计**：能量 VAD 断句——静音段直接丢弃不上传；纯静音永不出段
 - **复用 mmx CLI 登录**：自动读 `~/.mmx/config.json` 的 API Key，装过 mmx 就零配置；也可在设置里填独立 Key（保存时永不下发明文）
+- **ASR 服务商可插拔**：设置页「接入」里选服务商——MiniMax 原生、OpenAI 兼容（OpenAI / SiliconFlow / OpenRouter，以及本地 faster-whisper-server、whisper.cpp server）、或通用自定义接口；本地服务不需要 API Key
 - **全局热键**：默认 `Ctrl+Alt+L` 一键 开始/停止 识别
 - **自动重试**：网络/服务端错误重试 2 次；鉴权错误明确报错不空转
 
@@ -28,6 +29,7 @@
 2. 满足以下任一：
    - 已装 [mmx CLI](https://github.com/MiniMax-AI/cli) 并登录（`mmx auth login --api-key sk-xxx`）
    - 或在设置面板手动填 API Key
+   - 或改用其他 ASR 服务（见下节），本地服务可不要 Key
 
 ### 运行
 
@@ -49,6 +51,21 @@ cargo run --release
 - **浏览器源（推荐）**：来源 → 浏览器 → URL 填 `http://127.0.0.1:39871/`，宽高建议 1200×280。主题/字号跟随桌面端设置自动同步。
 - **窗口采集**：来源 → 窗口捕获 → 选「直播歌词字幕」。注意悬停工具栏会一起被采集，直播中建议用浏览器源。
 
+## 接入其他 ASR 服务
+
+设置面板 → 「接入」标签 → 「服务商」下拉，三种模式：
+
+| 服务商 | 接口 | 请求体 | 取文本 |
+| --- | --- | --- | --- |
+| `mmx` | `POST {地址}/v1/speech_to_text` | multipart | `text` |
+| `openai` | `POST {地址}/v1/audio/transcriptions` | multipart | `text` |
+| `custom` | `POST {地址}{接口路径}` | JSON（`audio` 为 base64 的 wav） | 按「文本字段路径」取，如 `result.text` |
+
+- `openai` 兼容 OpenAI、SiliconFlow、OpenRouter，以及本地 **faster-whisper-server**、**whisper.cpp server** 等，地址填到 `/v1` 为止即可
+- `custom` 用于自建接口：「接口路径」填相对地址（如 `/v1/asr`），「文本字段路径」填响应里识别文字的位置（点号分隔，支持 `a.b` 与 `a.0.b`）
+- 非 `mmx` 服务商不需要 API Key，本地服务留空即可
+- 填好后点「测试连接」验证；切换服务商时正在识别的管线会自动按新配置重启
+
 ## 使用建议
 
 - **默认用麦克风**：说话有自然停顿，VAD 断句准、配额省。系统声音在持续背景音乐下会一直出段烧配额。
@@ -63,7 +80,7 @@ cargo run --release
 cpal 采集（麦克风 / WASAPI loopback，设备混音格式 f32）
   → 引擎线程：声道混缩 → 7.2kHz 抗混叠低通 → 线性重采样到 16k mono
   → 能量 VAD 分段（2s 满段 或 500ms 后遇 300ms 静音提前断句；纯静音丢弃）
-  → 工作线程：WAV 编码 → POST /v1/speech_to_text（multipart，重试×2）
+  → 工作线程：WAV 编码 → POST 到所选 ASR 服务（mmx：multipart /v1/speech_to_text；OpenAI 兼容：multipart /audio/transcriptions；自定义：JSON + base64 音频；重试×2）
   → 总线：Tauri 事件（桌面窗口）+ WebSocket 广播（OBS 浏览器源）
 ```
 
