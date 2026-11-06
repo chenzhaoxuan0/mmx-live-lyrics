@@ -352,6 +352,7 @@
           </div>
           <div class="hint" id="key-hint"></div>
           <div class="test-result" id="test-result"></div>
+          <div class="hint">服务商与接口地址在「接入」页配置。MiniMax 用户留空即可复用 mmx CLI 登录密钥；其他服务商请填写自己的 API Key。</div>
         </div>
 
         <!-- ============ 外观 ============ -->
@@ -481,6 +482,34 @@
 
         <!-- ============ 接入 ============ -->
         <div class="tab-page" id="tab-net">
+          <div class="section-title">识别服务商（ASR）</div>
+          <div class="row">
+            <label>服务商</label>
+            <select id="sel-provider">
+              <option value="mmx">MiniMax（原生）</option>
+              <option value="openai">OpenAI 兼容（Whisper / 本地服务）</option>
+              <option value="custom">自定义接口（HTTP + JSON）</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>接口地址</label>
+            <input type="text" id="in-base-url" placeholder="https://api.minimaxi.com" autocomplete="off">
+          </div>
+          <div class="row">
+            <label>模型</label>
+            <input type="text" id="in-model" placeholder="asr-1.0" autocomplete="off">
+          </div>
+          <div class="row" id="row-custom-path">
+            <label>接口路径</label>
+            <input type="text" id="in-custom-path" placeholder="/v1/speech_to_text" autocomplete="off">
+          </div>
+          <div class="row" id="row-custom-text">
+            <label>文本字段</label>
+            <input type="text" id="in-custom-text-path" placeholder="text" autocomplete="off">
+          </div>
+          <div class="hint" id="provider-hint"></div>
+
+          <div class="section-title">OBS 接入</div>
           <div class="row">
             <label>OBS 接入</label>
             <input type="checkbox" id="ck-obs" checked style="flex:none">
@@ -680,7 +709,13 @@
     s.language = $('sel-language').value;
     s.segmentSeconds = parseFloat($('rg-segment').value);
     var key = $('in-apikey').value.trim();
+    // 未改动则发 __keep__，让后端保留旧 Key（后端只接受 camelCase 键名）
     s.apiKey = key ? key : ((state.settings && state.settings.apiKeySet) ? '__keep__' : null);
+    s.provider = $('sel-provider').value;
+    s.baseUrl = $('in-base-url').value.trim();
+    s.model = $('in-model').value.trim();
+    s.customPath = $('in-custom-path').value.trim();
+    s.customTextPath = $('in-custom-text-path').value.trim();
     s.fontFamily = $('in-font-family').value.trim() || null;
     s.fontSize = parseFloat($('rg-font').value);
     s.fontWeight = parseInt($('sel-weight').value, 10);
@@ -709,6 +744,40 @@
     }, 500);
   }
   function showErr(e) { console.error(e); }
+
+  /* ---------- 服务商（ASR） ---------- */
+  var PROVIDER_META = {
+    mmx: {
+      url: 'https://api.minimaxi.com',
+      model: 'asr-1.0',
+      path: '/v1/speech_to_text',
+      hint: 'MiniMax 原生接口：POST {地址}/v1/speech_to_text。留空 API Key 即复用 mmx CLI 登录密钥。'
+    },
+    openai: {
+      url: 'https://api.openai.com/v1',
+      model: 'whisper-1',
+      path: '',
+      hint: 'OpenAI 兼容接口：POST {地址}/audio/transcriptions。适用于 OpenAI、SiliconFlow、OpenRouter，以及本地 faster-whisper-server / whisper.cpp server 等。'
+    },
+    custom: {
+      url: '',
+      model: '',
+      path: '/v1/asr',
+      hint: '自定义接口：POST {地址}{接口路径}，请求体为 JSON（含 base64 的 wav 音频），响应按「文本字段」路径取识别结果（点号分隔，如 result.text）。'
+    }
+  };
+  function syncProviderUi() {
+    var p = $('sel-provider').value;
+    var m = PROVIDER_META[p] || PROVIDER_META.mmx;
+    var custom = p === 'custom';
+    $('row-custom-path').style.display = custom ? '' : 'none';
+    $('row-custom-text').style.display = custom ? '' : 'none';
+    $('provider-hint').textContent = m.hint;
+    // 地址/模型留空时给默认值；用户改过 provider 时自动填推荐值
+    if (!$('in-base-url').value.trim() && m.url) $('in-base-url').value = m.url;
+    if (!$('in-model').value.trim() && m.model) $('in-model').value = m.model;
+    if (custom && !$('in-custom-path').value.trim() && m.path) $('in-custom-path').value = m.path;
+  }
 
   /* ---------- 预设 ---------- */
   function refreshPresetSelect() {
@@ -794,11 +863,20 @@
       $('in-apikey').placeholder = s.apiKeySet
         ? '已设置自定义 Key（留空保持不变）'
         : (s.mmxKeyFound ? '留空使用 mmx CLI 登录密钥 ✓' : '未检测到 mmx 登录，请填写 Key');
-      $('key-hint').textContent = s.mmxKeyFound || s.apiKeySet
-        ? (s.apiKeySet ? '当前使用自定义 Key。清空并保存可回退到 mmx CLI 登录密钥。'
-                       : '已检测到 mmx CLI 登录（~/.mmx/config.json），留空即可直接使用。')
-        : '未检测到 mmx CLI 登录。安装 mmx 后执行 mmx auth login --api-key sk-xxx，或在此填写 Key。';
+      var prov = s.provider || 'mmx';
+      $('key-hint').textContent = prov === 'mmx'
+        ? (s.mmxKeyFound || s.apiKeySet
+            ? (s.apiKeySet ? '当前使用自定义 Key。清空并保存可回退到 mmx CLI 登录密钥。'
+                           : '已检测到 mmx CLI 登录（~/.mmx/config.json），留空即可直接使用。')
+            : '未检测到 mmx CLI 登录。安装 mmx 后执行 mmx auth login --api-key sk-xxx，或在此填写 Key。')
+        : '请填写该服务商的 API Key（本地服务无鉴权可留空）。留空保存将保留已设置的 Key。';
       $('ck-obs').checked = !!s.obsEnabled;
+      $('sel-provider').value = s.provider || 'mmx';
+      $('in-base-url').value = s.baseUrl || '';
+      $('in-model').value = s.model || '';
+      $('in-custom-path').value = s.customPath || '';
+      $('in-custom-text-path').value = s.customTextPath || '';
+      syncProviderUi();
       $('in-hotkey').value = s.hotkey || 'Ctrl+Alt+L';
       $('sel-autostart').value = s.autoStart ? '1' : '0';
       if (s.inputDevice) $('sel-input-device').value = s.inputDevice;
@@ -902,6 +980,17 @@
       });
     });
 
+    $('sel-provider').addEventListener('change', function () {
+      var m = PROVIDER_META[this.value] || PROVIDER_META.mmx;
+      // 切换服务商时把地址/模型换成该服务商的推荐值（用户可再改）
+      $('in-base-url').value = m.url || '';
+      $('in-model').value = m.model || '';
+      $('in-custom-path').value = m.path || '';
+      syncProviderUi();
+      saveSoon();
+    });
+    ['in-base-url', 'in-model', 'in-custom-path', 'in-custom-text-path']
+      .forEach(function (id) { $(id).addEventListener('change', saveSoon); });
     $('sel-mic-on').addEventListener('change', saveSoon);
     $('sel-sys-on').addEventListener('change', saveSoon);
     $('rg-segment').addEventListener('input', function () {
