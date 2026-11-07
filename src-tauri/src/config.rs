@@ -114,6 +114,10 @@ pub struct Settings {
     pub bg_color: String,
     #[serde(alias = "bg_opacity")]
     pub bg_opacity: f32,
+    /// 外观默认值版本：升级时按新默认值刷新一次旧配置（见 config::load）
+    /// 缺字段 = 0 = "从未迁移过"，必须走一次迁移才能拿到新默认值
+    #[serde(default)]
+    pub look_version: u32,
     #[serde(default = "d_true", alias = "show_prev")]
     pub show_prev: bool,
     #[serde(alias = "hist_font_size")]
@@ -151,16 +155,22 @@ fn d_glow_color() -> String {
     "#8b5cf6".into()
 }
 fn d_glow_strength() -> f32 {
-    22.0
+    0.0
 }
 fn d_bg_color() -> String {
     "#080a12".into()
 }
 fn d_bg_opacity() -> f32 {
-    0.0
+    0.2
 }
 fn d_true() -> bool {
     true
+}
+/// 当前外观默认值版本。改动默认外观（背景/描边/光晕）时 +1，
+/// 旧配置会在下次启动时被刷新成新默认值。
+pub const LOOK_VERSION: u32 = 2;
+fn d_look_version() -> u32 {
+    LOOK_VERSION
 }
 fn d_hist_size() -> f32 {
     40.0
@@ -200,7 +210,8 @@ impl Default for Settings {
             glow_color: d_glow_color(),
             glow_strength: d_glow_strength(),
             bg_color: d_bg_color(),
-            bg_opacity: 0.0,
+            bg_opacity: d_bg_opacity(),
+            look_version: d_look_version(),
             show_prev: true,
             hist_font_size: d_hist_size(),
             hist_color: d_hist_color(),
@@ -228,7 +239,7 @@ pub fn config_path() -> PathBuf {
 
 pub fn load() -> Settings {
     let raw = std::fs::read_to_string(config_path()).ok();
-    let s: Settings = raw
+    let mut s: Settings = raw
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
@@ -249,6 +260,20 @@ pub fn load() -> Settings {
                 let _ = save(&s);
             }
         }
+    }
+    // 外观默认值迁移：camelCase 修复前，前端的外观改动根本存不进磁盘，
+    // 旧配置里的外观值全是旧默认值而非用户的选择，所以按新默认值刷新一次零损失；
+    // 刷新后写入版本号，之后用户改的就是自己的，不再被动。
+    if s.look_version < LOOK_VERSION {
+        // 只覆盖"还等于旧默认值"的字段，用户自己调过的值一律保留
+        if s.bg_opacity == 0.0 {
+            s.bg_opacity = d_bg_opacity();
+        }
+        if s.glow_strength == 22.0 {
+            s.glow_strength = d_glow_strength();
+        }
+        s.look_version = LOOK_VERSION;
+        let _ = save(&s);
     }
     s
 }

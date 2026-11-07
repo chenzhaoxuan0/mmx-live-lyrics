@@ -8,11 +8,11 @@
   :root {
     --fs: 72px;
     --grad: linear-gradient(100deg, #67e8f9, #f0abfc);
-    --glow-c: rgba(139, 92, 246, .5);
-    --glow-b: 22px;
+    --glow-c: rgba(0, 0, 0, 0);
+    --glow-b: 0px;
     --oc: #000000;
     --ow: 0px;
-    --bgc: rgba(8, 10, 18, 0);
+    --bgc: rgba(8, 10, 18, 0.2);
     --hfs: 40px;
     --hist-c: rgba(255, 255, 255, .45);
     --dot: #9ca3af;
@@ -432,8 +432,8 @@
             </div>
             <div class="row">
               <label>光晕强度</label>
-              <input type="range" id="rg-glow" min="0" max="50" step="1" value="22">
-              <span class="val" id="glow-val">22px</span>
+              <input type="range" id="rg-glow" min="0" max="50" step="1" value="0">
+              <span class="val" id="glow-val">0px</span>
             </div>
           </div>
 
@@ -473,11 +473,11 @@
             </div>
             <div class="row">
               <label>背景不透明</label>
-              <input type="range" id="rg-bg" min="0" max="100" step="5" value="0">
-              <span class="val" id="bg-val">0%</span>
+              <input type="range" id="rg-bg" min="0" max="100" step="5" value="20">
+              <span class="val" id="bg-val">20%</span>
             </div>
           </div>
-          <div class="hint">游戏画面上建议背景 20%–40% 不透明度提高可读性。</div>
+          <div class="hint">背景默认 20% 不透明度，游戏画面上可调到 20%–40% 提高可读性。</div>
         </div>
 
         <!-- ============ 接入 ============ -->
@@ -559,10 +559,10 @@
     'showPrev', 'histFontSize', 'histColor', 'histOpacity'];
 
   var BUILTIN_PRESETS = {
-    'aurora': { label: '极光（青紫粉渐变）', fontSize: 72, fontWeight: 900, color1: '#67e8f9', color2: '#f0abfc', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#8b5cf6', glowStrength: 22, bgColor: '#080a12', bgOpacity: 0, showPrev: true, histFontSize: 40, histColor: '#ffffff', histOpacity: 0.45, fontFamily: null },
-    'sunset': { label: '落日（金橙粉渐变）', fontSize: 72, fontWeight: 900, color1: '#fde68a', color2: '#f43f5e', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#fb7185', glowStrength: 22, bgColor: '#1a0e10', bgOpacity: 0, showPrev: true, histFontSize: 40, histColor: '#fde68a', histOpacity: 0.45, fontFamily: null },
-    'neon': { label: '霓虹（绿青渐变）', fontSize: 72, fontWeight: 900, color1: '#4ade80', color2: '#22d3ee', gradAngle: 100, outlineColor: '#03130f', outlineWidth: 0, glowColor: '#22d3ee', glowStrength: 28, bgColor: '#06110f', bgOpacity: 0, showPrev: true, histFontSize: 40, histColor: '#4ade80', histOpacity: 0.45, fontFamily: null },
-    'mono': { label: '纯白黑描边（通用）', fontSize: 72, fontWeight: 900, color1: '#ffffff', color2: '#ffffff', gradAngle: 100, outlineColor: '#000000', outlineWidth: 3.5, glowColor: '#000000', glowStrength: 10, bgColor: '#080a12', bgOpacity: 0, showPrev: true, histFontSize: 40, histColor: '#ffffff', histOpacity: 0.55, fontFamily: null }
+    'aurora': { label: '极光（青紫粉渐变）', fontSize: 72, fontWeight: 900, color1: '#67e8f9', color2: '#f0abfc', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#8b5cf6', glowStrength: 22, bgColor: '#080a12', bgOpacity: 0.2, showPrev: true, histFontSize: 40, histColor: '#ffffff', histOpacity: 0.45, fontFamily: null },
+    'sunset': { label: '落日（金橙粉渐变）', fontSize: 72, fontWeight: 900, color1: '#fde68a', color2: '#f43f5e', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#fb7185', glowStrength: 22, bgColor: '#1a0e10', bgOpacity: 0.2, showPrev: true, histFontSize: 40, histColor: '#fde68a', histOpacity: 0.45, fontFamily: null },
+    'neon': { label: '霓虹（绿青渐变）', fontSize: 72, fontWeight: 900, color1: '#4ade80', color2: '#22d3ee', gradAngle: 100, outlineColor: '#03130f', outlineWidth: 0, glowColor: '#22d3ee', glowStrength: 28, bgColor: '#06110f', bgOpacity: 0.2, showPrev: true, histFontSize: 40, histColor: '#4ade80', histOpacity: 0.45, fontFamily: null },
+    'mono': { label: '纯白黑描边（通用）', fontSize: 72, fontWeight: 900, color1: '#ffffff', color2: '#ffffff', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#000000', glowStrength: 0, bgColor: '#080a12', bgOpacity: 0.2, showPrev: true, histFontSize: 40, histColor: '#ffffff', histOpacity: 0.55, fontFamily: null }
   };
 
   function hexToRgba(hex, a) {
@@ -582,7 +582,7 @@
     r.setProperty('--oc', s.outlineColor || '#000000');
     r.setProperty('--ow', (s.outlineWidth || 0) + 'px');
     document.body.classList.toggle('has-outline', (s.outlineWidth || 0) > 0);
-    r.setProperty('--bgc', hexToRgba(s.bgColor || '#080a12', s.bgOpacity || 0));
+    r.setProperty('--bgc', hexToRgba(s.bgColor || '#080a12', s.bgOpacity == null ? 0.2 : s.bgOpacity));
     r.setProperty('--hfs', (s.histFontSize || 40) + 'px');
     r.setProperty('--hist-c', hexToRgba(s.histColor || '#ffffff', s.histOpacity == null ? 0.45 : s.histOpacity));
     var fam = s.fontFamily && String(s.fontFamily).trim();
@@ -611,7 +611,8 @@
     var ho = s.histOpacity == null ? 45 : Math.round((s.histOpacity) * 100);
     $('rg-hist-opacity').value = ho; $('hist-opacity-val').textContent = ho + '%';
     $('in-bg-color').value = s.bgColor || '#080a12'; $('hex-bg').textContent = s.bgColor || '#080a12';
-    $('rg-bg').value = Math.round((s.bgOpacity || 0) * 100); $('bg-val').textContent = Math.round((s.bgOpacity || 0) * 100) + '%';
+    var bo = s.bgOpacity == null ? 20 : Math.round(s.bgOpacity * 100);
+    $('rg-bg').value = bo; $('bg-val').textContent = bo + '%';
   }
 
   /* ---------- 布局：按窗口高度决定历史行数（最小 1 行 = 仅实时行） ---------- */
