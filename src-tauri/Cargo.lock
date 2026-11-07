@@ -2088,7 +2088,7 @@ dependencies = [
 
 [[package]]
 name = "mmx-live-lyrics"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cpal",
  "serde",
