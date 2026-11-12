@@ -118,6 +118,10 @@ pub struct Settings {
     /// 缺字段 = 0 = "从未迁移过"，必须走一次迁移才能拿到新默认值
     #[serde(default)]
     pub look_version: u32,
+    /// 当前选中的外观预设：builtin:<id> / user:<序号> / custom（无预设）
+    /// 空串 = 从未记录（迁移时按当前外观反推，见 config::load）
+    #[serde(default, alias = "look_preset")]
+    pub look_preset: String,
     #[serde(default = "d_true", alias = "show_prev")]
     pub show_prev: bool,
     #[serde(alias = "hist_font_size")]
@@ -140,10 +144,10 @@ fn d_font_weight() -> u32 {
     900
 }
 fn d_color1() -> String {
-    "#67e8f9".into()
+    "#ffffff".into()
 }
 fn d_color2() -> String {
-    "#f0abfc".into()
+    "#ffffff".into()
 }
 fn d_angle() -> u32 {
     100
@@ -152,7 +156,7 @@ fn d_outline_width() -> f32 {
     0.0
 }
 fn d_glow_color() -> String {
-    "#8b5cf6".into()
+    "#000000".into()
 }
 fn d_glow_strength() -> f32 {
     0.0
@@ -168,7 +172,7 @@ fn d_true() -> bool {
 }
 /// 当前外观默认值版本。改动默认外观（背景/描边/光晕）时 +1，
 /// 旧配置会在下次启动时被刷新成新默认值。
-pub const LOOK_VERSION: u32 = 2;
+pub const LOOK_VERSION: u32 = 3;
 fn d_look_version() -> u32 {
     LOOK_VERSION
 }
@@ -179,7 +183,7 @@ fn d_hist_color() -> String {
     "#ffffff".into()
 }
 fn d_hist_opacity() -> f32 {
-    0.45
+    0.55
 }
 
 impl Default for Settings {
@@ -212,6 +216,7 @@ impl Default for Settings {
             bg_color: d_bg_color(),
             bg_opacity: d_bg_opacity(),
             look_version: d_look_version(),
+            look_preset: "builtin:mono".into(),
             show_prev: true,
             hist_font_size: d_hist_size(),
             hist_color: d_hist_color(),
@@ -222,6 +227,46 @@ impl Default for Settings {
             window: None,
         }
     }
+}
+
+/// 外观是否等于内置的「纯白黑描边」预设
+fn looks_like_mono(s: &Settings) -> bool {
+    s.font_family.is_none()
+        && s.font_size == 72.0
+        && s.font_weight == 900
+        && s.color1 == "#ffffff"
+        && s.color2 == "#ffffff"
+        && s.grad_angle == 100
+        && s.outline_color == "#000000"
+        && s.outline_width == 0.0
+        && s.glow_color == "#000000"
+        && s.glow_strength == 0.0
+        && s.bg_color == "#080a12"
+        && s.bg_opacity == 0.2
+        && s.show_prev
+        && s.hist_font_size == 40.0
+        && s.hist_color == "#ffffff"
+        && s.hist_opacity == 0.55
+}
+
+/// 外观是否整组还等于旧默认值（极光配色）：整组未改过才允许整体刷新
+fn looks_like_old_default(s: &Settings) -> bool {
+    s.font_family.is_none()
+        && s.font_size == 72.0
+        && s.font_weight == 900
+        && s.color1 == "#67e8f9"
+        && s.color2 == "#f0abfc"
+        && s.grad_angle == 100
+        && s.outline_color == "#000000"
+        && s.outline_width == 0.0
+        && s.glow_color == "#8b5cf6"
+        && s.glow_strength == 0.0
+        && s.bg_color == "#080a12"
+        && s.bg_opacity == 0.2
+        && s.show_prev
+        && s.hist_font_size == 40.0
+        && s.hist_color == "#ffffff"
+        && s.hist_opacity == 0.45
 }
 
 pub fn config_path() -> PathBuf {
@@ -265,17 +310,47 @@ pub fn load() -> Settings {
     // 旧配置里的外观值全是旧默认值而非用户的选择，所以按新默认值刷新一次零损失；
     // 刷新后写入版本号，之后用户改的就是自己的，不再被动。
     if s.look_version < LOOK_VERSION {
-        // 只覆盖"还等于旧默认值"的字段，用户自己调过的值一律保留
-        if s.bg_opacity == 0.0 {
-            s.bg_opacity = d_bg_opacity();
-        }
-        if s.glow_strength == 22.0 {
-            s.glow_strength = d_glow_strength();
-        }
-        s.look_version = LOOK_VERSION;
+        migrate_look(&mut s);
         let _ = save(&s);
     }
     s
+}
+
+/// 外观默认值迁移：旧配置按新默认值刷新一次。
+///
+/// 原则：只动"还等于旧默认值"的字段，用户自己调过的值一律保留。
+/// 迁移后必定带上 look_preset（当前生效的预设），前端据此回显下拉框。
+fn migrate_look(s: &mut Settings) {
+    if s.look_version >= LOOK_VERSION {
+        return;
+    }
+    // 老版本内置预设留下的描边/光晕值：3.5/10（纯白黑描边）、22/28（极光等）一律归零
+    if s.outline_width == 3.5 {
+        s.outline_width = d_outline_width();
+    }
+    if s.glow_strength == 22.0 || s.glow_strength == 28.0 || s.glow_strength == 10.0 {
+        s.glow_strength = d_glow_strength();
+    }
+    // v1 的旧默认是背景全透明；v2 起 0 是合法的手动值，不再覆盖
+    if s.look_version < 2 && s.bg_opacity == 0.0 {
+        s.bg_opacity = d_bg_opacity();
+    }
+    // 还没有预设记录（老配置）→ 按当前外观反推
+    if s.look_preset.is_empty() {
+        if looks_like_mono(s) {
+            s.look_preset = "builtin:mono".into();
+        } else if looks_like_old_default(s) {
+            // 整组还是旧默认（极光配色）→ 刷成新默认（纯白黑描边）
+            s.color1 = d_color1();
+            s.color2 = d_color2();
+            s.glow_color = d_glow_color();
+            s.hist_opacity = d_hist_opacity();
+            s.look_preset = "builtin:mono".into();
+        } else {
+            s.look_preset = "custom".into();
+        }
+    }
+    s.look_version = LOOK_VERSION;
 }
 
 pub fn save(s: &Settings) -> Result<(), String> {
@@ -313,6 +388,140 @@ mod tests {
         let out = serde_json::to_string(&s).unwrap();
         assert!(out.contains("micEnabled"));
         assert!(out.contains("apiKey"));
+    }
+
+    /// 默认外观 = 内置「纯白黑描边」：描边宽度与光晕强度都是 0px
+    #[test]
+    fn default_look_is_mono_with_zero_outline_and_glow() {
+        let s = Settings::default();
+        assert_eq!(s.outline_width, 0.0, "默认描边宽度必须是 0px");
+        assert_eq!(s.glow_strength, 0.0, "默认光晕强度必须是 0px");
+        assert_eq!(s.color1, "#ffffff");
+        assert_eq!(s.color2, "#ffffff");
+        assert_eq!(s.glow_color, "#000000");
+        assert_eq!(s.look_preset, "builtin:mono");
+        assert!(looks_like_mono(&s), "默认外观必须能被识别为内置 mono 预设");
+    }
+
+    /// 旧配置（缺 lookPreset、仍是极光配色）→ 迁移成新的默认外观并记上 mono 预设
+    #[test]
+    fn old_aurora_defaults_migrate_to_mono() {
+        let mut s = Settings::default();
+        s.look_version = 0;
+        s.look_preset = String::new();
+        s.color1 = "#67e8f9".into();
+        s.color2 = "#f0abfc".into();
+        s.glow_color = "#8b5cf6".into();
+        s.hist_opacity = 0.45;
+        assert!(looks_like_old_default(&s));
+        // 模拟迁移里对"还等于旧默认值"的字段刷新
+        s.color1 = d_color1();
+        s.color2 = d_color2();
+        s.glow_color = d_glow_color();
+        s.hist_opacity = d_hist_opacity();
+        assert!(looks_like_mono(&s));
+    }
+
+    /// 老版本内置预设留下的描边/光晕值（3.5 / 10 / 22 / 28）一律归零
+    #[test]
+    fn legacy_outline_and_glow_values_are_zeroed() {
+        for legacy in [3.5f32, 0.0] {
+            let mut s = Settings::default();
+            s.look_version = 1;
+            s.outline_width = legacy;
+            migrate_look(&mut s);
+            assert_eq!(s.outline_width, 0.0, "描边宽度 {legacy} 必须归零");
+        }
+        for legacy in [10.0f32, 22.0, 28.0, 0.0] {
+            let mut s = Settings::default();
+            s.look_version = 1;
+            s.glow_strength = legacy;
+            migrate_look(&mut s);
+            assert_eq!(s.glow_strength, 0.0, "光晕强度 {legacy} 必须归零");
+        }
+    }
+
+    /// 旧配置（极光配色、未记录预设）→ 迁移成 mono 并带上 lookPreset
+    #[test]
+    fn legacy_config_migrates_to_mono_preset() {
+        let mut s = Settings::default();
+        s.look_version = 1;
+        s.look_preset = String::new();
+        s.color1 = "#67e8f9".into();
+        s.color2 = "#f0abfc".into();
+        s.glow_color = "#8b5cf6".into();
+        s.hist_opacity = 0.45;
+        migrate_look(&mut s);
+        assert_eq!(s.look_preset, "builtin:mono");
+        assert_eq!(s.color1, "#ffffff");
+        assert_eq!(s.color2, "#ffffff");
+        assert_eq!(s.glow_color, "#000000");
+        assert_eq!(s.outline_width, 0.0);
+        assert_eq!(s.glow_strength, 0.0);
+        assert_eq!(s.look_version, LOOK_VERSION);
+    }
+
+    /// 用户自己调过的外观必须原样保留，只补上 lookPreset 标记
+    #[test]
+    fn user_customised_look_is_preserved_by_migration() {
+        let mut s = Settings::default();
+        s.look_version = 1;
+        s.look_preset = String::new();
+        s.font_size = 100.0;
+        s.outline_width = 4.0;
+        s.glow_strength = 18.0;
+        s.color1 = "#123456".into();
+        migrate_look(&mut s);
+        assert_eq!(s.font_size, 100.0);
+        assert_eq!(s.outline_width, 4.0);
+        assert_eq!(s.glow_strength, 18.0);
+        assert_eq!(s.color1, "#123456");
+        assert_eq!(s.look_preset, "custom");
+    }
+
+    /// 用户机器上的真实旧配置（lookVersion=2 + 纯白黑描边外观）→ 迁移后仍是 mono
+    #[test]
+    fn real_world_v2_config_migrates_to_mono_preset() {
+        let raw = r##"{
+            "color1": "#ffffff", "color2": "#ffffff", "gradAngle": 100,
+            "outlineColor": "#000000", "outlineWidth": 0.0,
+            "glowColor": "#000000", "glowStrength": 0.0,
+            "bgColor": "#080a12", "bgOpacity": 0.2, "lookVersion": 2,
+            "showPrev": true, "histFontSize": 40.0, "histColor": "#ffffff",
+            "histOpacity": 0.55, "fontSize": 72.0, "fontWeight": 900
+        }"##;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        assert!(s.look_preset.is_empty(), "老配置没有 lookPreset 记录");
+        migrate_look(&mut s);
+        assert_eq!(s.look_preset, "builtin:mono");
+        assert_eq!(s.outline_width, 0.0);
+        assert_eq!(s.glow_strength, 0.0);
+        assert_eq!(s.look_version, LOOK_VERSION);
+    }
+
+    /// 已经是最新版本的用户配置不该被迁移动到
+    #[test]
+    fn current_version_config_is_not_migrated() {
+        let mut s = Settings::default();
+        s.outline_width = 5.0;
+        s.glow_strength = 20.0;
+        let before = s.clone();
+        migrate_look(&mut s);
+        assert_eq!(s.outline_width, before.outline_width);
+        assert_eq!(s.glow_strength, before.glow_strength);
+    }
+
+    /// lookPreset 要能读写（camelCase），旧配置缺它时按空串处理
+    #[test]
+    fn look_preset_round_trips() {
+        let raw = r#"{"lookPreset":"builtin:mono"}"#;
+        let s: Settings = serde_json::from_str(raw).unwrap();
+        assert_eq!(s.look_preset, "builtin:mono");
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(out.contains("lookPreset"));
+        // 缺字段 = 从未记录
+        let s2: Settings = serde_json::from_str("{}").unwrap();
+        assert!(s2.look_preset.is_empty());
     }
 
     /// 预设字段同样要走 camelCase

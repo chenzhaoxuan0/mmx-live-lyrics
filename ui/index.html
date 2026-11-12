@@ -7,14 +7,14 @@
 <style>
   :root {
     --fs: 72px;
-    --grad: linear-gradient(100deg, #67e8f9, #f0abfc);
+    --grad: linear-gradient(100deg, #ffffff, #ffffff);
     --glow-c: rgba(0, 0, 0, 0);
     --glow-b: 0px;
     --oc: #000000;
     --ow: 0px;
     --bgc: rgba(8, 10, 18, 0.2);
     --hfs: 40px;
-    --hist-c: rgba(255, 255, 255, .45);
+    --hist-c: rgba(255, 255, 255, .55);
     --dot: #9ca3af;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -364,7 +364,7 @@
             <button id="btn-preset-save">存为预设</button>
             <button id="btn-preset-del" class="danger" disabled>删除</button>
           </div>
-          <div class="hint">选择内置或已存预设立即应用；调整下方任意参数后可另存为自己的预设。所有改动自动保存。</div>
+          <div class="hint">选择内置或已存预设立即应用；「无预设（自定义）」= 描边宽度与光晕强度都是 0px 的纯净默认外观。调整下方任意参数后自动切到「无预设（自定义）」，可另存为自己的预设。所有改动自动保存。</div>
 
           <div class="section-title">实时字幕（底行）</div>
           <div class="grid2">
@@ -398,13 +398,13 @@
           <div class="grid2">
             <div class="row">
               <label>起始色</label>
-              <input type="color" id="in-color1" value="#67e8f9">
-              <span class="color-hex" id="hex-color1">#67e8f9</span>
+              <input type="color" id="in-color1" value="#ffffff">
+              <span class="color-hex" id="hex-color1">#ffffff</span>
             </div>
             <div class="row">
               <label>结束色</label>
-              <input type="color" id="in-color2" value="#f0abfc">
-              <span class="color-hex" id="hex-color2">#f0abfc</span>
+              <input type="color" id="in-color2" value="#ffffff">
+              <span class="color-hex" id="hex-color2">#ffffff</span>
             </div>
             <div class="row">
               <label>渐变角度</label>
@@ -427,8 +427,8 @@
             </div>
             <div class="row">
               <label>光晕颜色</label>
-              <input type="color" id="in-glow-color" value="#8b5cf6">
-              <span class="color-hex" id="hex-glow">#8b5cf6</span>
+              <input type="color" id="in-glow-color" value="#000000">
+              <span class="color-hex" id="hex-glow">#000000</span>
             </div>
             <div class="row">
               <label>光晕强度</label>
@@ -458,8 +458,8 @@
             </div>
             <div class="row">
               <label>历史不透明</label>
-              <input type="range" id="rg-hist-opacity" min="0" max="100" step="5" value="45">
-              <span class="val" id="hist-opacity-val">45%</span>
+              <input type="range" id="rg-hist-opacity" min="0" max="100" step="5" value="55">
+              <span class="val" id="hist-opacity-val">55%</span>
             </div>
           </div>
           <div class="hint">历史区行数由窗口高度与字号自动决定；句子像文本一样从左到右排列、逐行上顶，超出窗口顶部即消失。看实时语音盯底行，找历史内容往上看。</div>
@@ -550,13 +550,24 @@
   var $ = function (id) { return document.getElementById(id); };
   var state = {
     settings: null, running: false, saveTimer: null, rectTimer: null,
-    histSentences: [], histRows: 0
+    histSentences: [], histRows: 0,
+    activePreset: 'custom'   // 当前选中的预设：custom（无预设）/ builtin:<id> / user:<名称>
   };
 
   /* ---------- 外观字段 ---------- */
   var LOOK_FIELDS = ['fontFamily', 'fontSize', 'fontWeight', 'color1', 'color2', 'gradAngle',
     'outlineColor', 'outlineWidth', 'glowColor', 'glowStrength', 'bgColor', 'bgOpacity',
     'showPrev', 'histFontSize', 'histColor', 'histOpacity'];
+
+  /* 默认外观（无预设时使用）：纯白字 + 黑描边色；描边宽度与光晕强度均为 0px */
+  var DEFAULT_LOOK = {
+    fontFamily: null, fontSize: 72, fontWeight: 900,
+    color1: '#ffffff', color2: '#ffffff', gradAngle: 100,
+    outlineColor: '#000000', outlineWidth: 0,
+    glowColor: '#000000', glowStrength: 0,
+    bgColor: '#080a12', bgOpacity: 0.2,
+    showPrev: true, histFontSize: 40, histColor: '#ffffff', histOpacity: 0.55
+  };
 
   var BUILTIN_PRESETS = {
     'aurora': { label: '极光（青紫粉渐变）', fontSize: 72, fontWeight: 900, color1: '#67e8f9', color2: '#f0abfc', gradAngle: 100, outlineColor: '#000000', outlineWidth: 0, glowColor: '#8b5cf6', glowStrength: 0, bgColor: '#080a12', bgOpacity: 0.2, showPrev: true, histFontSize: 40, histColor: '#ffffff', histOpacity: 0.45, fontFamily: null },
@@ -575,10 +586,10 @@
   function applyLook(s) {
     var r = document.documentElement.style;
     r.setProperty('--fs', (s.fontSize || 72) + 'px');
-    r.setProperty('--grad', 'linear-gradient(' + (s.gradAngle || 0) + 'deg, ' + (s.color1 || '#67e8f9') + ', ' + (s.color2 || '#f0abfc') + ')');
+    r.setProperty('--grad', 'linear-gradient(' + (s.gradAngle || 0) + 'deg, ' + (s.color1 || DEFAULT_LOOK.color1) + ', ' + (s.color2 || DEFAULT_LOOK.color2) + ')');
     var gs = s.glowStrength || 0;
-    r.setProperty('--glow-c', gs > 0 ? hexToRgba(s.glowColor, 0.5) : 'rgba(0,0,0,0)');
-    r.setProperty('--glow-b', Math.max(gs, 1) + 'px');
+    r.setProperty('--glow-c', gs > 0 ? hexToRgba(s.glowColor || DEFAULT_LOOK.glowColor, 0.5) : 'rgba(0,0,0,0)');
+    r.setProperty('--glow-b', (gs > 0 ? Math.max(gs, 1) : 0) + 'px');
     r.setProperty('--oc', s.outlineColor || '#000000');
     r.setProperty('--ow', (s.outlineWidth || 0) + 'px');
     document.body.classList.toggle('has-outline', (s.outlineWidth || 0) > 0);
@@ -599,16 +610,16 @@
     $('sel-weight').value = String(s.fontWeight || 900);
     $('rg-font').value = s.fontSize || 72; $('font-val').textContent = Math.round(s.fontSize || 72) + 'px';
     $('sel-show-prev').value = s.showPrev === false ? '0' : '1';
-    $('in-color1').value = s.color1 || '#67e8f9'; $('hex-color1').textContent = s.color1;
-    $('in-color2').value = s.color2 || '#f0abfc'; $('hex-color2').textContent = s.color2;
+    $('in-color1').value = s.color1 || DEFAULT_LOOK.color1; $('hex-color1').textContent = s.color1 || DEFAULT_LOOK.color1;
+    $('in-color2').value = s.color2 || DEFAULT_LOOK.color2; $('hex-color2').textContent = s.color2 || DEFAULT_LOOK.color2;
     $('rg-angle').value = s.gradAngle || 0; $('angle-val').textContent = (s.gradAngle || 0) + '°';
     $('in-outline-color').value = s.outlineColor || '#000000'; $('hex-outline').textContent = s.outlineColor || '#000000';
     $('rg-outline').value = s.outlineWidth || 0; $('outline-val').textContent = (s.outlineWidth || 0) + 'px';
-    $('in-glow-color').value = s.glowColor || '#8b5cf6'; $('hex-glow').textContent = s.glowColor || '#8b5cf6';
+    $('in-glow-color').value = s.glowColor || DEFAULT_LOOK.glowColor; $('hex-glow').textContent = s.glowColor || DEFAULT_LOOK.glowColor;
     $('rg-glow').value = s.glowStrength || 0; $('glow-val').textContent = (s.glowStrength || 0) + 'px';
     $('rg-hist-font').value = s.histFontSize || 40; $('hist-font-val').textContent = Math.round(s.histFontSize || 40) + 'px';
     $('in-hist-color').value = s.histColor || '#ffffff'; $('hex-hist').textContent = s.histColor || '#ffffff';
-    var ho = s.histOpacity == null ? 45 : Math.round((s.histOpacity) * 100);
+    var ho = s.histOpacity == null ? 55 : Math.round((s.histOpacity) * 100);
     $('rg-hist-opacity').value = ho; $('hist-opacity-val').textContent = ho + '%';
     $('in-bg-color').value = s.bgColor || '#080a12'; $('hex-bg').textContent = s.bgColor || '#080a12';
     var bo = s.bgOpacity == null ? 20 : Math.round(s.bgOpacity * 100);
@@ -665,6 +676,36 @@
     now.classList.add('pop');
     requestAnimationFrame(positionHist);
     syncStartHint();
+  }
+
+  /* 外观是否与某个外观定义完全一致（用于回显当前选中的预设） */
+  function looksEqual(a, b) {
+    if (!a || !b) return false;
+    for (var i = 0; i < LOOK_FIELDS.length; i++) {
+      var f = LOOK_FIELDS[i];
+      var va = a[f], vb = b[f];
+      if (f === 'fontFamily') {
+        if ((va || null) !== (vb || null)) return false;
+      } else if (f === 'showPrev') {
+        if (!!va !== !!vb) return false;
+      } else if (typeof va === 'number') {
+        if (Math.abs((typeof vb === 'number' ? vb : 0) - va) > 0.001) return false;
+      } else if (String(va == null ? '' : va).toLowerCase() !== String(vb == null ? '' : vb).toLowerCase()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /* 手动改了外观参数 → 当前不再是任何内置预设 */
+  function onLookEdited() {
+    var s = collectSettings();
+    applyLook(s);
+    var st = state.settings || (state.settings = {});
+    LOOK_FIELDS.forEach(function (f) { st[f] = s[f]; });
+    st.lookPreset = PRESET_CUSTOM;
+    setPresetSelection(PRESET_CUSTOM);
+    saveSoon();
   }
 
   /* ---------- 状态 ---------- */
@@ -781,10 +822,14 @@
   }
 
   /* ---------- 预设 ---------- */
+  var PRESET_CUSTOM = 'custom';   // 无预设（自定义）：描边宽度与光晕强度默认 0px
+
   function refreshPresetSelect() {
     var sel = $('sel-preset');
-    var cur = sel.value;
     sel.innerHTML = '';
+    var c = document.createElement('option');
+    c.value = PRESET_CUSTOM; c.textContent = '无预设（自定义）';
+    sel.appendChild(c);
     Object.keys(BUILTIN_PRESETS).forEach(function (id) {
       var o = document.createElement('option');
       o.value = 'builtin:' + id; o.textContent = '★ ' + BUILTIN_PRESETS[id].label;
@@ -795,32 +840,84 @@
       var g = document.createElement('option');
       g.disabled = true; g.textContent = '── 我的预设 ──';
       sel.appendChild(g);
-      user.forEach(function (p, i) {
+      user.forEach(function (p) {
         var o = document.createElement('option');
-        o.value = 'user:' + i; o.textContent = p.name;
+        o.value = 'user:' + p.name; o.textContent = p.name;
         sel.appendChild(o);
       });
     }
-    if (cur) sel.value = cur;
+    setPresetSelection(state.activePreset);
   }
-  function applyPreset(fields) {
+
+  /* 设置下拉框选中项，并同步"删除"按钮可用性 */
+  function setPresetSelection(v) {
+    var sel = $('sel-preset');
+    var val = v || PRESET_CUSTOM;
+    var exists = false;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === val) { exists = true; break; }
+    }
+    state.activePreset = exists ? val : PRESET_CUSTOM;
+    if (exists) sel.value = state.activePreset;
+    $('btn-preset-del').disabled = state.activePreset.indexOf('user:') !== 0;
+  }
+
+  /* 按当前外观回显选中的预设：匹配不到就是"无预设（自定义）" */
+  function syncPresetSelection() {
+    var s = state.settings;
+    if (!s) return;
+    var user = s.presets || [];
+    var hit = null;
+    var key = s.lookPreset || '';
+    if (key === PRESET_CUSTOM) {
+      hit = PRESET_CUSTOM;
+    } else if (key.indexOf('builtin:') === 0 && BUILTIN_PRESETS[key.slice(8)]) {
+      hit = key;
+    } else if (key.indexOf('user:') === 0) {
+      for (var u = 0; u < user.length; u++) {
+        if (user[u].name === key.slice(5)) { hit = key; break; }
+      }
+    }
+    if (!hit) {
+      // 无记录或记录失效 → 按外观值反推
+      var ids = Object.keys(BUILTIN_PRESETS);
+      for (var i = 0; i < ids.length; i++) {
+        if (looksEqual(BUILTIN_PRESETS[ids[i]], s)) { hit = 'builtin:' + ids[i]; break; }
+      }
+      if (!hit) {
+        for (var j = 0; j < user.length; j++) {
+          if (looksEqual(user[j], s)) { hit = 'user:' + user[j].name; break; }
+        }
+      }
+    }
+    setPresetSelection(hit || PRESET_CUSTOM);
+    if (state.settings) state.settings.lookPreset = state.activePreset;
+  }
+  function applyPreset(fields, presetKey) {
     var s = collectSettings();
     LOOK_FIELDS.forEach(function (f) { if (fields[f] !== undefined) s[f] = fields[f]; });
     applyLook(s);
     state.settings = Object.assign(state.settings || {}, s);
+    if (presetKey) state.settings.lookPreset = presetKey;
     saveSoon();
   }
   function bindPresetUi() {
     refreshPresetSelect();
     $('sel-preset').addEventListener('change', function () {
       var v = this.value;
-      if (v.indexOf('builtin:') === 0) {
-        applyPreset(BUILTIN_PRESETS[v.slice(8)]);
-        $('btn-preset-del').disabled = true;
+      if (v === PRESET_CUSTOM) {
+        applyPreset(DEFAULT_LOOK, PRESET_CUSTOM);
+        setPresetSelection(PRESET_CUSTOM);
+      } else if (v.indexOf('builtin:') === 0) {
+        applyPreset(BUILTIN_PRESETS[v.slice(8)], v);
+        setPresetSelection(v);
       } else if (v.indexOf('user:') === 0) {
-        var p = state.settings.presets[parseInt(v.slice(5), 10)];
-        if (p) applyPreset(p);
-        $('btn-preset-del').disabled = false;
+        var list = state.settings.presets || [];
+        var nm = v.slice(5);
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].name === nm) { applyPreset(list[i], v); break; }
+        }
+        setPresetSelection(v);
       }
     });
     $('btn-preset-save').addEventListener('click', function () {
@@ -833,18 +930,23 @@
       var idx = state.settings.presets.findIndex(function (p) { return p.name === name; });
       if (idx >= 0) state.settings.presets[idx] = preset;
       else state.settings.presets.push(preset);
+      state.activePreset = 'user:' + name;
       refreshPresetSelect();
-      $('sel-preset').value = 'user:' + (idx >= 0 ? idx : state.settings.presets.length - 1);
-      $('btn-preset-del').disabled = false;
+      setPresetSelection(state.activePreset);
+      if (state.settings) state.settings.lookPreset = state.activePreset;
       saveSoon();
     });
     $('btn-preset-del').addEventListener('click', function () {
       var v = $('sel-preset').value;
       if (v.indexOf('user:') !== 0) return;
-      var i = parseInt(v.slice(5), 10);
-      state.settings.presets.splice(i, 1);
+      var nm = v.slice(5);
+      var list = state.settings.presets || [];
+      for (var i = list.length - 1; i >= 0; i--) {
+        if (list[i].name === nm) { list.splice(i, 1); break; }
+      }
       refreshPresetSelect();
-      $('btn-preset-del').disabled = true;
+      setPresetSelection(PRESET_CUSTOM);
+      if (state.settings) state.settings.lookPreset = PRESET_CUSTOM;
       saveSoon();
     });
   }
@@ -854,6 +956,8 @@
     invoke('cmd_get_settings').then(function (s) {
       state.settings = s;
       applyLook(s);
+      refreshPresetSelect();
+      syncPresetSelection();
       state.running = !!s.running;
       $('sel-mic-on').value = s.micEnabled === false ? '0' : '1';
       $('sel-sys-on').value = s.systemEnabled === false ? '0' : '1';
@@ -1004,13 +1108,13 @@
     // 外观即时预览 + 自动保存
     var LOOK_RANGES = ['rg-font', 'rg-angle', 'rg-outline', 'rg-glow', 'rg-bg', 'rg-hist-font', 'rg-hist-opacity'];
     LOOK_RANGES.forEach(function (id) {
-      $(id).addEventListener('input', function () { applyLook(collectSettings()); saveSoon(); });
+      $(id).addEventListener('input', function () { onLookEdited(); });
     });
     ['sel-weight', 'sel-show-prev', 'in-font-family'].forEach(function (id) {
-      $(id).addEventListener('change', function () { applyLook(collectSettings()); saveSoon(); });
+      $(id).addEventListener('change', function () { onLookEdited(); });
     });
     ['in-color1', 'in-color2', 'in-outline-color', 'in-glow-color', 'in-bg-color', 'in-hist-color'].forEach(function (id) {
-      $(id).addEventListener('input', function () { applyLook(collectSettings()); saveSoon(); });
+      $(id).addEventListener('input', function () { onLookEdited(); });
     });
 
     // 一键开始 / 停止
@@ -1022,7 +1126,7 @@
     function stepFont(d) {
       var el = $('rg-font');
       el.value = Math.max(24, Math.min(200, parseInt(el.value, 10) + d));
-      applyLook(collectSettings()); saveSoon();
+      onLookEdited();
     }
     $('btn-fminus').addEventListener('click', function () { stepFont(-6); });
     $('btn-fplus').addEventListener('click', function () { stepFont(6); });
