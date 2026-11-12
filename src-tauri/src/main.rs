@@ -288,6 +288,15 @@ fn cmd_get_settings(state: State<AppState>) -> Result<serde_json::Value, String>
     Ok(v)
 }
 
+/// 只由后端维护、不接受前端回传的字段。
+/// 迁移标记（lookVersion / micVersion）若被前端写回旧值（0 = 从未迁移），
+/// 下次启动会反复触发迁移，把用户自己选的外观、打开的麦克风又刷掉，
+/// 所以这里强制沿用内存里的当前值。
+fn preserve_server_owned_fields(incoming: &mut Settings, old: &Settings) {
+    incoming.look_version = old.look_version;
+    incoming.mic_version = old.mic_version;
+}
+
 #[tauri::command]
 fn cmd_set_settings(
     state: State<AppState>,
@@ -305,6 +314,7 @@ fn cmd_set_settings(
         } else if incoming.api_key.as_deref() == Some("") {
             incoming.api_key = None;
         }
+        preserve_server_owned_fields(&mut incoming, &old);
         (old, incoming)
     };
     // 2) 落盘（失败则内存保持旧值，两者不会出现不一致）
@@ -443,6 +453,19 @@ fn selftest() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 迁移标记只能由后端维护：前端回传旧值也不能把版本号打回 0，
+    /// 否则下次启动会反复触发迁移，把用户的选择刷掉。
+    #[test]
+    fn migration_markers_are_not_writable_from_frontend() {
+        let old = Settings::default();
+        let mut incoming = Settings::default();
+        incoming.look_version = 0;
+        incoming.mic_version = 0;
+        preserve_server_owned_fields(&mut incoming, &old);
+        assert_eq!(incoming.look_version, config::LOOK_VERSION);
+        assert_eq!(incoming.mic_version, config::MIC_VERSION);
+    }
 
     /// 根因回归：曾经的写法把 settings 锁一直持有到 reconcile 返回，
     /// 而 reconcile 内部又锁同一把锁 → 同线程重入自死锁（Tauri 同步命令在主线程 → 应用假死）。

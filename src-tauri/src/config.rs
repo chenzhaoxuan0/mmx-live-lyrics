@@ -56,9 +56,13 @@ pub struct LookPreset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
-    /// 双声源独立开关：默认两者同时识别
+    /// 麦克风开关：默认关闭（默认开着容易把环境音也识别进去）
     #[serde(alias = "mic_enabled")]
     pub mic_enabled: bool,
+    /// 麦克风默认值版本：升级时按新默认值刷新一次旧配置（见 config::load）
+    /// 缺字段 = 0 = "从未迁移过"，必须走一次迁移才能拿到新默认值
+    #[serde(default)]
+    pub mic_version: u32,
     #[serde(alias = "system_enabled")]
     pub system_enabled: bool,
     #[serde(alias = "input_device")]
@@ -176,6 +180,12 @@ pub const LOOK_VERSION: u32 = 3;
 fn d_look_version() -> u32 {
     LOOK_VERSION
 }
+/// 麦克风开关默认值版本。改动麦克风默认值时 +1，
+/// 旧配置会在下次启动时被刷新成新默认值（只刷一次）。
+pub const MIC_VERSION: u32 = 1;
+fn d_mic_version() -> u32 {
+    MIC_VERSION
+}
 fn d_hist_size() -> f32 {
     40.0
 }
@@ -189,7 +199,8 @@ fn d_hist_opacity() -> f32 {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            mic_enabled: true,
+            mic_enabled: false,
+            mic_version: d_mic_version(),
             system_enabled: true,
             input_device: None,
             loopback_device: None,
@@ -313,6 +324,12 @@ pub fn load() -> Settings {
         migrate_look(&mut s);
         let _ = save(&s);
     }
+    // 麦克风默认值迁移：旧默认是「麦克风 + 电脑音频双开」，升级后麦克风默认关闭。
+    // 只在缺版本号时刷一次，刷完写入版本号，之后用户自己开的就是自己的，不再被动。
+    if s.mic_version < MIC_VERSION {
+        migrate_mic(&mut s);
+        let _ = save(&s);
+    }
     s
 }
 
@@ -351,6 +368,16 @@ fn migrate_look(s: &mut Settings) {
         }
     }
     s.look_version = LOOK_VERSION;
+}
+
+/// 麦克风默认值迁移：旧配置里「麦克风开启」只是旧默认值留下的，
+/// 升级后统一刷成关闭；用户之后自己打开的不会再被刷掉。
+fn migrate_mic(s: &mut Settings) {
+    if s.mic_version >= MIC_VERSION {
+        return;
+    }
+    s.mic_enabled = false;
+    s.mic_version = MIC_VERSION;
 }
 
 pub fn save(s: &Settings) -> Result<(), String> {
@@ -534,5 +561,101 @@ mod tests {
         assert_eq!(p.font_size, 100.0);
         assert!(!p.show_prev);
         assert_eq!(p.hist_opacity, 0.2);
+    }
+
+    /// 麦克风默认关闭，电脑音频默认保持开启
+    #[test]
+    fn mic_is_off_by_default() {
+        let s = Settings::default();
+        assert!(!s.mic_enabled, "麦克风识别默认必须是关闭");
+        assert!(s.system_enabled, "电脑音频默认保持开启");
+        assert_eq!(s.mic_version, MIC_VERSION);
+    }
+
+    /// 旧配置（没有 micVersion）升级后麦克风刷成关闭
+    #[test]
+    fn legacy_config_mic_is_flipped_to_off() {
+        let raw = r#"{"micEnabled":true,"systemEnabled":true,"lookVersion":3}"#;
+        let mut s: Settings = serde_json::from_str(raw).unwrap();
+        assert_eq!(s.mic_version, 0, "老配置没有 micVersion 记录");
+        assert!(s.mic_enabled);
+        migrate_mic(&mut s);
+        assert!(!s.mic_enabled, "迁移后麦克风必须关闭");
+        assert_eq!(s.mic_version, MIC_VERSION);
+    }
+
+    /// 迁移只跑一次：用户之后自己打开的麦克风不会再被刷掉
+    #[test]
+    fn mic_choice_is_kept_after_migration() {
+        let mut s = Settings::default();
+        s.mic_enabled = true;
+        migrate_mic(&mut s);
+        assert!(s.mic_enabled, "迁移过一次后，用户自己开的麦克风必须保留");
+    }
+
+    /// 端到端：旧配置文件启动一次，麦克风应被刷成关闭并落盘；
+    /// 用户之后自己打开的麦克风不会在下次启动时被动掉。
+    #[test]
+    fn load_migrates_legacy_mic_to_off_and_keeps_user_choice() {
+        let dir = std::env::temp_dir().join(format!("mmx-mic-e2e-{}", std::process::id()));
+        let cfg_dir = dir.join("mmx-live-lyrics");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config.json");
+        let old_appdata = std::env::var("APPDATA").ok();
+        std::env::set_var("APPDATA", &dir);
+
+        // 旧配置：麦克风开着（那是旧默认值留下的），且没有 micVersion。
+        // 设 MMX_TEST_SEED_CONFIG 可换成一个真实配置文件来复跑同一条路径。
+        let seed_body = match std::env::var("MMX_TEST_SEED_CONFIG") {
+            Ok(p) => std::fs::read_to_string(&p).unwrap(),
+            Err(_) => {
+                r#"{"micEnabled":true,"systemEnabled":true,"lookVersion":3,"lookPreset":"builtin:mono"}"#
+                    .to_string()
+            }
+        };
+        std::fs::write(&cfg, seed_body).unwrap();
+
+        let s = load();
+        assert!(!s.mic_enabled, "旧配置启动后麦克风必须关闭");
+        assert_eq!(s.mic_version, MIC_VERSION);
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(saved["micEnabled"], serde_json::json!(false), "落盘必须写成关闭");
+        assert_eq!(saved["micVersion"], serde_json::json!(MIC_VERSION));
+        if std::env::var("MMX_TEST_SEED_CONFIG").is_ok() {
+            println!(
+                "--- 迁移后落盘 ---\n{}",
+                std::fs::read_to_string(&cfg).unwrap()
+            );
+        }
+
+        // 再启动一次：状态稳定，不会来回跳
+        assert!(!load().mic_enabled, "第二次启动仍应是关闭");
+
+        // 用户自己把麦克风打开并保存 → 下次启动保留
+        let mut on = s.clone();
+        on.mic_enabled = true;
+        save(&on).unwrap();
+        assert!(
+            load().mic_enabled,
+            "用户自己打开的麦克风必须保留，不能再被刷掉"
+        );
+
+        if let Some(v) = old_appdata {
+            std::env::set_var("APPDATA", v);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// micVersion 要能读写（camelCase），旧配置缺它时按 0 处理
+    #[test]
+    fn mic_version_round_trips() {
+        let raw = r#"{"micVersion":1}"#;
+        let s: Settings = serde_json::from_str(raw).unwrap();
+        assert_eq!(s.mic_version, 1);
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(out.contains("micVersion"));
+        let s2: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s2.mic_version, 0, "缺字段 = 从未记录");
     }
 }

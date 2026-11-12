@@ -307,8 +307,8 @@
           <div class="row">
             <label>🎤 麦克风</label>
             <select id="sel-mic-on">
-              <option value="1">识别开启</option>
               <option value="0">关闭</option>
+              <option value="1">识别开启</option>
             </select>
           </div>
           <div class="row" id="row-input-device">
@@ -326,7 +326,7 @@
             <label>输出设备</label>
             <select id="sel-loopback-device"><option value="">（默认设备）</option></select>
           </div>
-          <div class="hint">两者同时识别时字幕合并显示。麦克风适合人声（说话停顿断句、省配额）；电脑音频会捕捉游戏/音乐声，持续音乐下消耗配额更多。关闭任一声源立即生效。</div>
+          <div class="hint">两者同时识别时字幕合并显示。麦克风默认关闭，要人声时在这里打开：说话停顿断句、省配额；电脑音频会捕捉游戏/音乐声，持续音乐下消耗配额更多。关闭任一声源立即生效。</div>
 
           <div class="row">
             <label>语言</label>
@@ -959,7 +959,7 @@
       refreshPresetSelect();
       syncPresetSelection();
       state.running = !!s.running;
-      $('sel-mic-on').value = s.micEnabled === false ? '0' : '1';
+      $('sel-mic-on').value = s.micEnabled === true ? '1' : '0';
       $('sel-sys-on').value = s.systemEnabled === false ? '0' : '1';
       $('sel-language').value = s.language || 'zh';
       $('rg-segment').value = s.segmentSeconds || 2;
